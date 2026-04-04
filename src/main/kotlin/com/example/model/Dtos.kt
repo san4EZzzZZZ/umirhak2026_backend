@@ -46,6 +46,38 @@ data class PasswordResetConfirmRequest(
 )
 
 @Serializable
+data class StudentDiplomaCheckRequest(
+    val universityCode: String,
+    val diplomaNumber: String,
+    val graduationYear: Int,
+    val specialty: String
+)
+
+@Serializable
+data class StudentDiplomaCheckResponse(
+    val found: Boolean,
+    val holderFullName: String,
+    val lookupHash: String,
+    val reason: String? = null
+)
+
+@Serializable
+data class StudentVerificationLinkCreateRequest(
+    val universityCode: String,
+    val diplomaNumber: String,
+    val ttlHours: Int = 72
+)
+
+@Serializable
+data class StudentVerificationLinkResponse(
+    val token: String,
+    val verificationUrl: String,
+    val status: String,
+    val issuedAt: String,
+    val expiresAt: String
+)
+
+@Serializable
 data class CreateUniversityRequest(
     val code: String,
     val name: String,

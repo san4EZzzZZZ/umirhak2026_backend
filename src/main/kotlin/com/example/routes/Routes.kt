@@ -9,8 +9,10 @@ import com.example.model.LoginRequest
 import com.example.model.LoginResponse
 import com.example.model.PasswordResetConfirmRequest
 import com.example.model.PasswordResetRequest
+import com.example.model.StudentDiplomaCheckRequest
 import com.example.model.StudentQrRequest
 import com.example.model.StudentRegisterRequest
+import com.example.model.StudentVerificationLinkCreateRequest
 import com.example.security.CryptoService
 import com.example.integration.EmailServiceClient
 import com.example.service.DiplomaService
@@ -107,6 +109,33 @@ fun Application.registerRoutes(config: AppConfig, database: DatabaseFactory) {
             get("/auth/password-reset/validate") {
                 val token = call.request.queryParameters["token"] ?: ""
                 call.respond(mapOf("active" to service.isPasswordResetTokenActive(token)))
+            }
+
+            post("/student/registry/diploma-check") {
+                val login = call.request.queryParameters["login"]
+                    ?: throw IllegalArgumentException("login is required")
+                val req = call.receive<StudentDiplomaCheckRequest>()
+                call.respond(service.verifyStudentDiplomaInputByLogin(login, req))
+            }
+
+            get("/student/registry/verification-links") {
+                val login = call.request.queryParameters["login"]
+                    ?: throw IllegalArgumentException("login is required")
+                call.respond(service.listStudentVerificationLinksByLogin(login))
+            }
+
+            post("/student/registry/verification-links") {
+                val login = call.request.queryParameters["login"]
+                    ?: throw IllegalArgumentException("login is required")
+                val req = call.receive<StudentVerificationLinkCreateRequest>()
+                call.respond(service.createStudentVerificationLinkByLogin(login, req))
+            }
+
+            post("/student/registry/verification-links/{token}/revoke") {
+                val login = call.request.queryParameters["login"]
+                    ?: throw IllegalArgumentException("login is required")
+                val token = call.parameters["token"] ?: throw IllegalArgumentException("token is required")
+                call.respond(mapOf("revoked" to service.revokeStudentVerificationLinkByLogin(login, token)))
             }
 
             post("/students/register") {
@@ -308,6 +337,17 @@ fun Application.registerRoutes(config: AppConfig, database: DatabaseFactory) {
 
                 val token = call.parameters["token"] ?: throw IllegalArgumentException("token is required")
                 call.respond(service.verifyQr(token))
+            }
+
+            get("/verify/student-link/{token}") {
+                val ip = call.request.headers["X-Forwarded-For"] ?: call.request.local.remoteHost
+                if (!service.allowRequest("ratelimit:student-link:$ip")) {
+                    call.respond(HttpStatusCode.TooManyRequests, mapOf("error" to "Too many requests"))
+                    return@get
+                }
+
+                val token = call.parameters["token"] ?: throw IllegalArgumentException("token is required")
+                call.respond(service.verifyStudentVerificationLink(token))
             }
         }
     }

@@ -8,10 +8,14 @@ import com.example.model.BulkAddResultResponse
 import com.example.model.DiplomaRevokePreviewResponse
 import com.example.model.DiplomaCreateRequest
 import com.example.model.QrVerificationResponse
+import com.example.model.StudentDiplomaCheckRequest
+import com.example.model.StudentDiplomaCheckResponse
 import com.example.model.StudentQrResponse
 import com.example.model.UniversityDiplomaRecordResponse
 import com.example.model.UniversityRegistryDashboardResponse
 import com.example.model.UniversityResponse
+import com.example.model.StudentVerificationLinkCreateRequest
+import com.example.model.StudentVerificationLinkResponse
 import com.example.model.VerifyResponse
 import com.example.security.CryptoService
 import com.google.zxing.BarcodeFormat
@@ -43,6 +47,14 @@ private data class ParsedDiplomaRow(
 
 private data class DiplomaLookupRow(
     val status: String
+)
+
+private data class StudentVerificationLinkRow(
+    val token: String,
+    val lookupHash: String,
+    val createdAt: OffsetDateTime,
+    val expiresAt: OffsetDateTime,
+    val revokedAt: OffsetDateTime?
 )
 
 private data class PasswordResetTarget(
@@ -451,6 +463,254 @@ class DiplomaService(
 
     fun allowRequest(rateKey: String): Boolean = redis.rateLimit(rateKey, config.rateLimitPerMinute, 60)
 
+    fun verifyStudentDiplomaInputByLogin(login: String, req: StudentDiplomaCheckRequest): StudentDiplomaCheckResponse {
+        val student = resolveStudentByLogin(login)
+        val universityCode = req.universityCode.trim().uppercase()
+        val diplomaNumber = req.diplomaNumber.trim()
+        if (universityCode.isBlank() || diplomaNumber.isBlank()) {
+            throw IllegalArgumentException("universityCode and diplomaNumber are required")
+        }
+        if (req.graduationYear !in 1950..2100) {
+            throw IllegalArgumentException("Invalid graduation year")
+        }
+        if (req.specialty.trim().isBlank()) {
+            throw IllegalArgumentException("specialty is required")
+        }
+
+        val lookupHash = lookupHash(universityCode, diplomaNumber)
+        val found = database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                select 1
+                from diploma_registry
+                where diploma_lookup_hash = ? and status = 'ACTIVE'
+                limit 1
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, lookupHash)
+                stmt.executeQuery().use { rs -> rs.next() }
+            }
+        }
+
+        return StudentDiplomaCheckResponse(
+            found = found,
+            holderFullName = student.second,
+            lookupHash = lookupHash,
+            reason = if (found) null else "Diploma not found"
+        )
+    }
+
+    fun createStudentVerificationLinkByLogin(
+        login: String,
+        req: StudentVerificationLinkCreateRequest
+    ): StudentVerificationLinkResponse {
+        val (studentEmail, _) = resolveStudentByLogin(login)
+        val universityCode = req.universityCode.trim().uppercase()
+        val diplomaNumber = req.diplomaNumber.trim()
+        val ttlHours = req.ttlHours.coerceIn(1, 168)
+        if (universityCode.isBlank() || diplomaNumber.isBlank()) {
+            throw IllegalArgumentException("universityCode and diplomaNumber are required")
+        }
+
+        val lookupHash = lookupHash(universityCode, diplomaNumber)
+        val exists = database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                select 1
+                from diploma_registry
+                where diploma_lookup_hash = ? and status = 'ACTIVE'
+                limit 1
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, lookupHash)
+                stmt.executeQuery().use { rs -> rs.next() }
+            }
+        }
+        if (!exists) {
+            throw IllegalArgumentException("Diploma not found")
+        }
+
+        val token = crypto.generateToken()
+        val createdAt = OffsetDateTime.now(ZoneOffset.UTC)
+        val expiresAt = createdAt.plusHours(ttlHours.toLong())
+        database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                insert into student_verification_links(
+                    id,
+                    token,
+                    student_email,
+                    diploma_lookup_hash,
+                    created_at,
+                    expires_at
+                ) values (?, ?, ?, ?, ?, ?)
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setObject(1, UUID.randomUUID())
+                stmt.setString(2, token)
+                stmt.setString(3, studentEmail)
+                stmt.setString(4, lookupHash)
+                stmt.setObject(5, createdAt)
+                stmt.setObject(6, expiresAt)
+                stmt.executeUpdate()
+            }
+        }
+
+        return StudentVerificationLinkResponse(
+            token = token,
+            verificationUrl = "${config.publicBaseUrl}/api/v1/verify/student-link/$token",
+            status = "ACTIVE",
+            issuedAt = createdAt.toString(),
+            expiresAt = expiresAt.toString()
+        )
+    }
+
+    fun listStudentVerificationLinksByLogin(login: String): List<StudentVerificationLinkResponse> {
+        val (studentEmail, _) = resolveStudentByLogin(login)
+        val now = OffsetDateTime.now(ZoneOffset.UTC)
+        return database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                select token, diploma_lookup_hash, created_at, expires_at, revoked_at
+                from student_verification_links
+                where student_email = ?
+                order by created_at desc
+                limit 20
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, studentEmail)
+                stmt.executeQuery().use { rs ->
+                    val rows = mutableListOf<StudentVerificationLinkRow>()
+                    while (rs.next()) {
+                        rows.add(
+                            StudentVerificationLinkRow(
+                                token = rs.getString("token"),
+                                lookupHash = rs.getString("diploma_lookup_hash"),
+                                createdAt = rs.getObject("created_at", OffsetDateTime::class.java),
+                                expiresAt = rs.getObject("expires_at", OffsetDateTime::class.java),
+                                revokedAt = rs.getObject("revoked_at", OffsetDateTime::class.java)
+                            )
+                        )
+                    }
+                    rows.map { row ->
+                        val status = when {
+                            row.revokedAt != null -> "REVOKED"
+                            row.expiresAt.isBefore(now) || row.expiresAt.isEqual(now) -> "EXPIRED"
+                            else -> "ACTIVE"
+                        }
+                        StudentVerificationLinkResponse(
+                            token = row.token,
+                            verificationUrl = "${config.publicBaseUrl}/api/v1/verify/student-link/${row.token}",
+                            status = status,
+                            issuedAt = row.createdAt.toString(),
+                            expiresAt = row.expiresAt.toString()
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun revokeStudentVerificationLinkByLogin(login: String, token: String): Boolean {
+        val (studentEmail, _) = resolveStudentByLogin(login)
+        val safeToken = token.trim()
+        if (safeToken.isBlank()) return false
+        val updated = database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                delete from student_verification_links
+                where token = ? and student_email = ?
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, safeToken)
+                stmt.setString(2, studentEmail)
+                stmt.executeUpdate()
+            }
+        }
+        return updated > 0
+    }
+
+    fun verifyStudentVerificationLink(token: String): VerifyResponse {
+        val safeToken = token.trim()
+        if (safeToken.isBlank()) {
+            return VerifyResponse(
+                valid = false,
+                verdict = "RED",
+                reason = "Token is required",
+                checkedAt = OffsetDateTime.now(ZoneOffset.UTC).toString()
+            )
+        }
+        val now = OffsetDateTime.now(ZoneOffset.UTC)
+        val row = database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                select diploma_lookup_hash, expires_at, revoked_at
+                from student_verification_links
+                where token = ?
+                limit 1
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, safeToken)
+                stmt.executeQuery().use { rs ->
+                    if (!rs.next()) {
+                        null
+                    } else {
+                        Triple(
+                            rs.getString("diploma_lookup_hash"),
+                            rs.getObject("expires_at", OffsetDateTime::class.java),
+                            rs.getObject("revoked_at", OffsetDateTime::class.java)
+                        )
+                    }
+                }
+            }
+        } ?: return VerifyResponse(
+            valid = false,
+            verdict = "RED",
+            reason = "Verification link not found",
+            checkedAt = now.toString()
+        )
+
+        val (_, expiresAt, revokedAt) = row
+        if (revokedAt != null) {
+            return VerifyResponse(
+                valid = false,
+                verdict = "RED",
+                reason = "Verification link revoked",
+                checkedAt = now.toString()
+            )
+        }
+        if (expiresAt.isBefore(now) || expiresAt.isEqual(now)) {
+            return VerifyResponse(
+                valid = false,
+                verdict = "RED",
+                reason = "Verification link expired",
+                checkedAt = now.toString()
+            )
+        }
+
+        val diplomaStatus = findDiplomaByLookupHash(row.first)
+        return when {
+            diplomaStatus == null -> VerifyResponse(
+                valid = false,
+                verdict = "RED",
+                reason = "Diploma not found",
+                checkedAt = now.toString()
+            )
+            diplomaStatus.status != "ACTIVE" -> VerifyResponse(
+                valid = false,
+                verdict = "RED",
+                reason = "Diploma revoked",
+                checkedAt = now.toString()
+            )
+            else -> VerifyResponse(
+                valid = true,
+                verdict = "GREEN",
+                reason = "Diploma exists",
+                checkedAt = now.toString()
+            )
+        }
+    }
+
     fun requestPasswordReset(role: String, loginOrEmail: String) {
         val target = findPasswordResetTarget(role, loginOrEmail) ?: return
         val token = crypto.generateToken()
@@ -797,6 +1057,29 @@ class DiplomaService(
                 stmt.setString(2, accountRole)
                 stmt.setString(3, accountLogin)
                 stmt.executeUpdate()
+            }
+        }
+    }
+
+    private fun resolveStudentByLogin(login: String): Pair<String, String> {
+        val normalized = login.trim().lowercase()
+        if (normalized.isBlank()) {
+            throw IllegalArgumentException("login is required")
+        }
+        return database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                select email, full_name
+                from students
+                where email = ?
+                limit 1
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, normalized)
+                stmt.executeQuery().use { rs ->
+                    if (!rs.next()) throw IllegalArgumentException("Student not found")
+                    Pair(rs.getString("email"), rs.getString("full_name"))
+                }
             }
         }
     }
