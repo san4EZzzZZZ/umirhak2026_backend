@@ -36,6 +36,7 @@ dependencies {
     implementation(libs.ktor.server.call.logging)
     implementation(libs.ktor.server.status.pages)
     implementation(libs.ktor.server.forwarded.header)
+    implementation(libs.ktor.server.cors)
     implementation(libs.hikari)
     implementation(libs.postgresql)
     implementation(libs.flyway.core)

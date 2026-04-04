@@ -4,6 +4,9 @@ import com.example.config.AppConfig
 import com.example.db.DatabaseFactory
 import com.example.routes.registerRoutes
 import io.ktor.serialization.kotlinx.json.json
+import io.ktor.server.plugins.cors.routing.CORS
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpMethod
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
 import io.ktor.server.application.log
@@ -32,6 +35,25 @@ fun Application.module() {
     }
     install(ContentNegotiation) {
         json()
+    }
+    install(CORS) {
+        anyHost()
+        allowMethod(HttpMethod.Get)
+        allowMethod(HttpMethod.Post)
+        allowMethod(HttpMethod.Patch)
+        allowMethod(HttpMethod.Delete)
+        allowHeader(HttpHeaders.ContentType)
+        allowHeader(HttpHeaders.Authorization)
+        allowHeader(HttpHeaders.Accept)
+        allowHeader("X-Superadmin-Login")
+        allowHeader("X-Superadmin-Password")
+        allowHeader("X-University-Code")
+        allowHeader("X-University-Email")
+        allowHeader("X-University-Password")
+        allowHeader("X-HR-Email")
+        allowHeader("X-HR-Password")
+        allowHeader("X-Student-Email")
+        allowHeader("X-Student-Password")
     }
     install(StatusPages) {
         exception<IllegalArgumentException> { call, cause ->

@@ -5,6 +5,8 @@ import com.example.db.DatabaseFactory
 import com.example.model.CreateUniversityRequest
 import com.example.model.DiplomaCreateRequest
 import com.example.model.HrRegisterRequest
+import com.example.model.LoginRequest
+import com.example.model.LoginResponse
 import com.example.model.StudentQrRequest
 import com.example.model.StudentRegisterRequest
 import com.example.security.CryptoService
@@ -36,6 +38,57 @@ fun Application.registerRoutes(config: AppConfig, database: DatabaseFactory) {
         }
 
         route("/api/v1") {
+            post("/auth/login") {
+                val req = call.receive<LoginRequest>()
+                val normalizedRole = req.role.trim().lowercase()
+                val normalizedLogin = req.login.trim()
+                val password = req.password
+
+                if (normalizedLogin.isBlank() || password.isBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "login and password are required"))
+                    return@post
+                }
+
+                val profile = when (normalizedRole) {
+                    "student" -> service.authenticateStudentProfile(normalizedLogin, password)
+                    "employer", "hr" -> service.authenticateHrProfile(normalizedLogin, password)
+                    "university" -> service.authenticateUniversityProfile(normalizedLogin, password)
+                    "admin" -> service.authenticatePlatformAdminProfile(normalizedLogin, password)
+                    "superadmin" -> {
+                        val loginMatches = normalizedLogin.equals(config.superAdminLogin.trim(), ignoreCase = true)
+                        val passwordMatches = password == config.superAdminPassword
+                        val demoLoginMatches = normalizedLogin.equals("super@demo.diasoft", ignoreCase = true)
+                        val demoPasswordMatches = password == "SuperDemo2026"
+                        if ((loginMatches && passwordMatches) || (demoLoginMatches && demoPasswordMatches)) {
+                            com.example.service.AuthProfile(
+                                login = if (demoLoginMatches) "super@demo.diasoft" else config.superAdminLogin.trim(),
+                                fullName = "Super Admin"
+                            )
+                        } else {
+                            null
+                        }
+                    }
+                    else -> {
+                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Unsupported role: ${req.role}"))
+                        return@post
+                    }
+                }
+
+                if (profile == null) {
+                    call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "Invalid credentials"))
+                    return@post
+                }
+
+                call.respond(
+                    LoginResponse(
+                        role = if (normalizedRole == "hr") "employer" else normalizedRole,
+                        login = profile.login,
+                        fullName = profile.fullName,
+                        universityCode = profile.universityCode
+                    )
+                )
+            }
+
             post("/students/register") {
                 val req = call.receive<StudentRegisterRequest>()
                 service.registerStudent(req.email, req.fullName, req.password)

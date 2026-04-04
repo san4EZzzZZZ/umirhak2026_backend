@@ -41,6 +41,12 @@ private data class DiplomaLookupRow(
     val status: String
 )
 
+data class AuthProfile(
+    val login: String,
+    val fullName: String,
+    val universityCode: String? = null
+)
+
 @Serializable
 private data class QrPayload(
     val studentEmail: String,
@@ -131,7 +137,13 @@ class DiplomaService(
 
     fun authenticateStudent(email: String, password: String): Boolean = authenticateSimpleUser("students", email, password)
 
+    fun authenticateStudentProfile(email: String, password: String): AuthProfile? =
+        authenticateSimpleUserProfile("students", email, password)
+
     fun authenticateHr(email: String, password: String): Boolean = authenticateSimpleUser("hr_specialists", email, password)
+
+    fun authenticateHrProfile(email: String, password: String): AuthProfile? =
+        authenticateSimpleUserProfile("hr_specialists", email, password)
 
     fun authenticateUniversity(code: String, email: String, password: String): Boolean {
         return database.withConnection { conn ->
@@ -142,6 +154,52 @@ class DiplomaService(
                 stmt.setString(2, email.trim().lowercase())
                 stmt.setString(3, crypto.hash(password))
                 stmt.executeQuery().use { rs -> rs.next() && rs.getBoolean("active") }
+            }
+        }
+    }
+
+    fun authenticateUniversityProfile(login: String, password: String): AuthProfile? {
+        return database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                select code, email, contact_full_name
+                from universities
+                where (email = ? or code = ?) and password_hash = ? and active = true
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, login.trim().lowercase())
+                stmt.setString(2, login.trim().uppercase())
+                stmt.setString(3, crypto.hash(password))
+                stmt.executeQuery().use { rs ->
+                    if (!rs.next()) return@withConnection null
+                    AuthProfile(
+                        login = rs.getString("email"),
+                        fullName = rs.getString("contact_full_name"),
+                        universityCode = rs.getString("code")
+                    )
+                }
+            }
+        }
+    }
+
+    fun authenticatePlatformAdminProfile(login: String, password: String): AuthProfile? {
+        return database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                select login, full_name
+                from platform_admins
+                where login = ? and password_hash = ? and active = true
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, login.trim().lowercase())
+                stmt.setString(2, crypto.hash(password))
+                stmt.executeQuery().use { rs ->
+                    if (!rs.next()) return@withConnection null
+                    AuthProfile(
+                        login = rs.getString("login"),
+                        fullName = rs.getString("full_name")
+                    )
+                }
             }
         }
     }
@@ -322,6 +380,22 @@ class DiplomaService(
                 stmt.setString(1, email.trim().lowercase())
                 stmt.setString(2, crypto.hash(password))
                 stmt.executeQuery().use { rs -> rs.next() }
+            }
+        }
+    }
+
+    private fun authenticateSimpleUserProfile(table: String, email: String, password: String): AuthProfile? {
+        return database.withConnection { conn ->
+            conn.prepareStatement("select email, full_name from $table where email = ? and password_hash = ?").use { stmt ->
+                stmt.setString(1, email.trim().lowercase())
+                stmt.setString(2, crypto.hash(password))
+                stmt.executeQuery().use { rs ->
+                    if (!rs.next()) return@withConnection null
+                    AuthProfile(
+                        login = rs.getString("email"),
+                        fullName = rs.getString("full_name")
+                    )
+                }
             }
         }
     }

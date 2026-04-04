@@ -17,6 +17,21 @@ data class HrRegisterRequest(
 )
 
 @Serializable
+data class LoginRequest(
+    val role: String,
+    val login: String,
+    val password: String
+)
+
+@Serializable
+data class LoginResponse(
+    val role: String,
+    val login: String,
+    val fullName: String,
+    val universityCode: String? = null
+)
+
+@Serializable
 data class CreateUniversityRequest(
     val code: String,
     val name: String,
