@@ -1,183 +1,127 @@
 ﻿# Diploma Verification Backend (MVP)
 
-Backend на `Ktor + PostgreSQL + Redis` с 4 ролями: `super-admin`, `university`, `hr`, `student`.
+Backend на `Ktor + PostgreSQL + Redis` с ролями: `super-admin`, `university`, `hr`, `student`.
 
-## Модель данных (4 таблицы)
+## Быстрый старт (рекомендуется для новых пользователей)
 
-1. `students`
-- `email`
-- `full_name`
-- `password_hash`
+### 1. Требования
 
-2. `hr_specialists`
-- `email`
-- `full_name`
-- `password_hash`
+- JDK 21
+- Docker Desktop (запущен)
 
-3. `universities`
-- `code`
-- `name`
-- `email`
-- `contact_full_name`
-- `password_hash`
+### 2. Перейти в папку backend
 
-4. `diploma_registry`
-- `diploma_payload_hash` = hash(ФИО + код вуза + специальность + код диплома + год)
-- `diploma_lookup_hash` = hash(код диплома + код вуза)
-- статус и служебные поля
+Важно запускать Gradle именно из директории проекта:
 
-Дополнительно в `diploma_registry` хранятся зашифрованные данные (ФИО/специальность/код диплома) для QR-страницы.
-
-## Запуск
-
-```bash
-./gradlew clean run
+```powershell
+cd D:\umirhak\umirhak2026_backend
 ```
 
-или
+Если запускать из родительской папки, будет ошибка:
+`.\gradlew.bat: The term '.\gradlew.bat' is not recognized...`
 
-```bash
+### 3. Поднять PostgreSQL и Redis
+
+```powershell
+docker compose up -d postgres redis
+```
+
+В этом проекте PostgreSQL проброшен на порт `55432` (чтобы избежать конфликтов с локальным Postgres на `5432`).
+
+### 4. Указать переменные окружения для локального запуска
+
+```powershell
+$env:JDBC_URL="jdbc:postgresql://localhost:55432/diasoft"
+$env:DB_USER="diasoft"
+$env:DB_PASSWORD="diasoft"
+```
+
+### 5. Запустить сервер
+
+```powershell
+.\gradlew.bat run
+```
+
+### 6. Проверить, что сервер жив
+
+```powershell
+iwr http://127.0.0.1:8080/health
+```
+
+Ожидаемый ответ: `{"status":"ok"}`.
+
+## Альтернатива: запуск всего через Docker
+
+```powershell
 docker compose up --build
 ```
 
-## Конфиг
+## Основные переменные конфигурации
 
-Через `application.yaml` / env:
 - `JDBC_URL`, `DB_USER`, `DB_PASSWORD`
 - `REDIS_URL`
 - `SUPERADMIN_LOGIN`, `SUPERADMIN_PASSWORD`
 - `HASH_SALT`, `ENCRYPTION_KEY_BASE64`
+- `PUBLIC_BASE_URL`
 
-## API
+Значения по умолчанию описаны в `src/main/resources/application.yaml`.
 
-### Super-admin
-- `POST /api/v1/admin/universities`
-  - headers: `X-Superadmin-Login`, `X-Superadmin-Password`
+## Частые проблемы и решения
 
-### Student
-- `POST /api/v1/students/register`
-- `POST /api/v1/student/qr`
-  - headers: `X-Student-Email`, `X-Student-Password`
-- `POST /api/v1/student/qr/{token}/revoke`
+### 1) `gradlew.bat` не найден
 
-### HR
-- `POST /api/v1/hr/register`
-- `GET /api/v1/hr/verify?universityCode=...&diplomaCode=...`
-  - headers: `X-HR-Email`, `X-HR-Password`
+Причина: команда выполнена не из папки `umirhak2026_backend`.
 
-### University
-- `POST /api/v1/university/diplomas`
-  - headers: `X-University-Code`, `X-University-Email`, `X-University-Password`
-- `POST /api/v1/university/diplomas/upload`
-  - multipart file `.csv/.xlsx`
-- `POST /api/v1/university/diplomas/revoke?diplomaCode=...`
-
-### Public verify
-- `GET /api/v1/verify/qr/{token}`
-
----
-
-## Postman: проверочный сценарий
-
-### 1) Создать аккаунт ВУЗа (super-admin)
-`POST http://localhost:8080/api/v1/admin/universities`
-
-Headers:
-- `X-Superadmin-Login: admin`
-- `X-Superadmin-Password: admin123`
-- `Content-Type: application/json`
-
-Body:
-```json
-{
-  "code": "MSU",
-  "name": "Moscow State University",
-  "email": "registrar@msu.ru",
-  "contactFullName": "Ivan Petrov",
-  "password": "msuPass123"
-}
+Решение:
+```powershell
+cd D:\umirhak\umirhak2026_backend
+.\gradlew.bat run
 ```
 
-### 2) Зарегистрировать HR
-`POST http://localhost:8080/api/v1/hr/register`
+### 2) Таймаут при скачивании Gradle wrapper
 
-Body:
-```json
-{
-  "email": "hr@company.com",
-  "fullName": "Anna HR",
-  "password": "hrPass123"
-}
+Симптом:
+`Downloading ... failed: timeout`
+
+Проверьте интернет/прокси/VPN и повторите:
+```powershell
+.\gradlew.bat run
 ```
 
-### 3) Зарегистрировать студента
-`POST http://localhost:8080/api/v1/students/register`
+### 3) `user "diasoft" password authentication failed`
 
-Body:
-```json
-{
-  "email": "student@mail.com",
-  "fullName": "Alex Student",
-  "password": "studPass123"
-}
+Причины:
+- конфликт порта `5432` с другим Postgres на хосте
+- приложение подключается не к тому экземпляру базы
+
+Решение для этого проекта:
+1. Использовать `JDBC_URL` с портом `55432`
+2. Запустить контейнеры из `docker-compose.yml`
+3. Указать:
+```powershell
+$env:JDBC_URL="jdbc:postgresql://localhost:55432/diasoft"
+$env:DB_USER="diasoft"
+$env:DB_PASSWORD="diasoft"
 ```
 
-### 4) Добавить диплом от ВУЗа
-`POST http://localhost:8080/api/v1/university/diplomas`
+### 4) Нужно полностью пересоздать БД
 
-Headers:
-- `X-University-Code: MSU`
-- `X-University-Email: registrar@msu.ru`
-- `X-University-Password: msuPass123`
+Если состояние БД сломано или credentials не совпадают:
 
-Body:
-```json
-{
-  "fullName": "Alex Student",
-  "specialty": "Computer Science",
-  "diplomaCode": "MSU-2026-0001",
-  "graduationYear": 2026
-}
+```powershell
+docker compose down -v
+docker compose up -d postgres redis
 ```
 
-### 5) Проверить диплом как HR
-`GET http://localhost:8080/api/v1/hr/verify?universityCode=MSU&diplomaCode=MSU-2026-0001`
+`-v` удаляет volume с данными PostgreSQL.
 
-Headers:
-- `X-HR-Email: hr@company.com`
-- `X-HR-Password: hrPass123`
+## Полезные endpoints
 
-Ожидание: `verdict = GREEN`.
+- Health: `GET /health`
+- API base: `/api/v1/...`
 
-### 6) Получить QR студентом
-`POST http://localhost:8080/api/v1/student/qr`
+## Короткий smoke-тест после запуска
 
-Headers:
-- `X-Student-Email: student@mail.com`
-- `X-Student-Password: studPass123`
-
-Body:
-```json
-{
-  "universityCode": "MSU",
-  "diplomaCode": "MSU-2026-0001",
-  "ttlMinutes": 30
-}
-```
-
-Ожидание: `token`, `verifyUrl`, `qrBase64Png`.
-
-### 7) Проверка QR (публично)
-`GET http://localhost:8080/api/v1/verify/qr/{token}`
-
-Ожидание: ФИО, специальность, университет, срок действия.
-
-### 8) Аннулировать диплом ВУЗом
-`POST http://localhost:8080/api/v1/university/diplomas/revoke?diplomaCode=MSU-2026-0001`
-
-Headers как в шаге 4.
-
-### 9) Повторно проверить HR
-Шаг 5 повторно.
-
-Ожидание: `verdict = RED`, причина `Diploma revoked`.
+1. `GET http://127.0.0.1:8080/health` -> `{"status":"ok"}`
+2. `POST /api/v1/hr/register` (любой тестовый пользователь)
+3. Убедиться, что ответ `200` и сервис не падает
