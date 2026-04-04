@@ -478,16 +478,31 @@ class DiplomaService(
         }
 
         val lookupHash = lookupHash(universityCode, diplomaNumber)
+        val expectedPayloadHashes = buildStudentFullNameCandidates(student.second)
+            .map { fullNameCandidate ->
+                payloadHash(
+                    fullName = fullNameCandidate,
+                    universityCode = universityCode,
+                    specialty = req.specialty,
+                    diplomaCode = diplomaNumber,
+                    graduationYear = req.graduationYear
+                )
+            }
+            .distinct()
         val found = database.withConnection { conn ->
+            val hashPlaceholders = expectedPayloadHashes.joinToString(",") { "?" }
             conn.prepareStatement(
                 """
                 select 1
                 from diploma_registry
-                where diploma_lookup_hash = ? and status = 'ACTIVE'
+                where diploma_lookup_hash = ? and diploma_payload_hash in ($hashPlaceholders) and status = 'ACTIVE'
                 limit 1
                 """.trimIndent()
             ).use { stmt ->
                 stmt.setString(1, lookupHash)
+                expectedPayloadHashes.forEachIndexed { index, hash ->
+                    stmt.setString(index + 2, hash)
+                }
                 stmt.executeQuery().use { rs -> rs.next() }
             }
         }
@@ -496,7 +511,7 @@ class DiplomaService(
             found = found,
             holderFullName = student.second,
             lookupHash = lookupHash,
-            reason = if (found) null else "Diploma not found"
+            reason = if (found) null else "Diploma data mismatch"
         )
     }
 
@@ -1121,8 +1136,7 @@ class DiplomaService(
             universityCode = universityCode,
             specialty = specialty,
             diplomaCode = diplomaCode,
-            graduationYear = graduationYear,
-            privateKeyHash = normalizedPrivateKeyHash
+            graduationYear = graduationYear
         )
         val lookupHash = lookupHash(universityCode, diplomaCode)
 
@@ -1261,19 +1275,36 @@ class DiplomaService(
         universityCode: String,
         specialty: String,
         diplomaCode: String,
-        graduationYear: Int,
-        privateKeyHash: String? = null
+        graduationYear: Int
     ): String {
-        val normalizedPrivateKeyHash = privateKeyHash?.trim()?.lowercase()
         val canonical = listOf(
             fullName.trim().lowercase(),
             universityCode.trim().uppercase(),
             specialty.trim().lowercase(),
             diplomaCode.trim().uppercase(),
-            graduationYear.toString(),
-            normalizedPrivateKeyHash ?: ""
+            graduationYear.toString()
         ).joinToString("|")
         return crypto.hash(canonical)
+    }
+
+    private fun buildStudentFullNameCandidates(fullName: String): List<String> {
+        val normalized = fullName.trim().replace(Regex("\\s+"), " ")
+        if (normalized.isBlank()) return emptyList()
+
+        val tokens = normalized.split(" ").filter { it.isNotBlank() }
+        val variants = linkedSetOf(normalized)
+        if (tokens.size >= 3) {
+            variants += "${tokens[0]} ${tokens[1]}"
+        }
+
+        // Support common "е/ё" input differences between account and diploma source.
+        variants += normalized.replace('ё', 'е').replace('Ё', 'Е')
+        if (tokens.size >= 3) {
+            val short = "${tokens[0]} ${tokens[1]}"
+            variants += short.replace('ё', 'е').replace('Ё', 'Е')
+        }
+
+        return variants.toList()
     }
 
     private fun lookupHash(universityCode: String, diplomaCode: String): String {
