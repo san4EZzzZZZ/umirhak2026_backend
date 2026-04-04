@@ -7,7 +7,7 @@ ktor:
 
 app:
   db:
-    jdbcUrl: ${JDBC_URL:jdbc:postgresql://localhost:5432/diasoft}
+    jdbcUrl: ${JDBC_URL:jdbc:postgresql://localhost:55432/diasoft}
     user: ${DB_USER:diasoft}
     password: ${DB_PASSWORD:diasoft}
   redis:

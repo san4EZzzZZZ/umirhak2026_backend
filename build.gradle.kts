@@ -51,7 +51,7 @@ dependencies {
 }
 
 flyway {
-    url = System.getenv("JDBC_URL") ?: "jdbc:postgresql://localhost:5432/diasoft"
+    url = System.getenv("JDBC_URL") ?: "jdbc:postgresql://localhost:55432/diasoft"
     user = System.getenv("DB_USER") ?: "diasoft"
     password = System.getenv("DB_PASSWORD") ?: "diasoft"
     locations = arrayOf("classpath:db/migration")
