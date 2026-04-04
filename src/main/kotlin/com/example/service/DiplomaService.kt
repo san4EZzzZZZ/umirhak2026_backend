@@ -6,6 +6,7 @@ import com.example.model.BulkUploadResponse
 import com.example.model.DiplomaCreateRequest
 import com.example.model.QrVerificationResponse
 import com.example.model.StudentQrResponse
+import com.example.model.UniversityRegistryDashboardResponse
 import com.example.model.UniversityResponse
 import com.example.model.VerifyResponse
 import com.example.security.CryptoService
@@ -63,6 +64,46 @@ class DiplomaService(
     private val redis: RedisService
 ) {
     private val json = Json { ignoreUnknownKeys = true }
+
+    fun getUniversityRegistryDashboard(login: String): UniversityRegistryDashboardResponse {
+        val normalizedLogin = login.trim()
+        if (normalizedLogin.isBlank()) {
+            throw IllegalArgumentException("login is required")
+        }
+
+        return database.withConnection { conn ->
+            val universityCode = conn.prepareStatement(
+                """
+                select code
+                from universities
+                where (email = ? or code = ?) and active = true
+                limit 1
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, normalizedLogin.lowercase())
+                stmt.setString(2, normalizedLogin.uppercase())
+                stmt.executeQuery().use { rs -> if (rs.next()) rs.getString("code") else null }
+            } ?: throw IllegalArgumentException("University not found")
+
+            val inRegistry = conn.prepareStatement(
+                """
+                select count(*) as cnt
+                from diploma_registry
+                where university_code = ? and status = 'ACTIVE'
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, universityCode)
+                stmt.executeQuery().use { rs ->
+                    if (rs.next()) rs.getInt("cnt") else 0
+                }
+            }
+
+            UniversityRegistryDashboardResponse(
+                pendingSignature = 0,
+                inRegistry = inRegistry
+            )
+        }
+    }
 
     fun registerStudent(email: String, fullName: String, password: String) {
         createSimpleUser(

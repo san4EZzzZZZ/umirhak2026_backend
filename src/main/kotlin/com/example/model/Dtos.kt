@@ -100,3 +100,9 @@ data class QrVerificationResponse(
     val expiresAt: String? = null,
     val checkedAt: String
 )
+
+@Serializable
+data class UniversityRegistryDashboardResponse(
+    val pendingSignature: Int,
+    val inRegistry: Int
+)

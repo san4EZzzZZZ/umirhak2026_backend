@@ -121,6 +121,12 @@ fun Application.registerRoutes(config: AppConfig, database: DatabaseFactory) {
                 call.respond(service.createUniversity(req.code, req.name, req.email, req.contactFullName, req.password))
             }
 
+            get("/university/registry/dashboard") {
+                val login = call.request.queryParameters["login"]
+                    ?: throw IllegalArgumentException("login is required")
+                call.respond(service.getUniversityRegistryDashboard(login))
+            }
+
             post("/university/diplomas") {
                 val code = call.request.headers["X-University-Code"] ?: throw IllegalArgumentException("X-University-Code is required")
                 val email = call.request.headers["X-University-Email"] ?: throw IllegalArgumentException("X-University-Email is required")
