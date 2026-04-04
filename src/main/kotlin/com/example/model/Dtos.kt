@@ -6,14 +6,16 @@ import kotlinx.serialization.Serializable
 data class StudentRegisterRequest(
     val email: String,
     val fullName: String,
-    val password: String
+    val password: String,
+    val confirmPassword: String? = null
 )
 
 @Serializable
 data class HrRegisterRequest(
     val email: String,
     val fullName: String,
-    val password: String
+    val password: String,
+    val confirmPassword: String? = null
 )
 
 @Serializable

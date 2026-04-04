@@ -65,7 +65,7 @@ class DiplomaService(
     private val json = Json { ignoreUnknownKeys = true }
 
     fun registerStudent(email: String, fullName: String, password: String) {
-        upsertSimpleUser(
+        createSimpleUser(
             table = "students",
             email = email,
             fullName = fullName,
@@ -74,7 +74,7 @@ class DiplomaService(
     }
 
     fun registerHr(email: String, fullName: String, password: String) {
-        upsertSimpleUser(
+        createSimpleUser(
             table = "hr_specialists",
             email = email,
             fullName = fullName,
@@ -354,23 +354,51 @@ class DiplomaService(
 
     fun allowRequest(rateKey: String): Boolean = redis.rateLimit(rateKey, config.rateLimitPerMinute, 60)
 
-    private fun upsertSimpleUser(table: String, email: String, fullName: String, password: String) {
+    private fun createSimpleUser(table: String, email: String, fullName: String, password: String) {
+        val normalizedEmail = email.trim().lowercase()
+        if (normalizedEmail.isBlank()) {
+            throw IllegalArgumentException("Email is required")
+        }
+        if (fullName.trim().isBlank()) {
+            throw IllegalArgumentException("Full name is required")
+        }
+        if (password.isBlank()) {
+            throw IllegalArgumentException("Password is required")
+        }
+
+        if (emailExistsInSystem(normalizedEmail)) {
+            throw IllegalStateException("Аккаунт с таким email уже существует")
+        }
+
         database.withConnection { conn ->
             conn.prepareStatement(
                 """
                 insert into $table(email, full_name, password_hash, created_at)
                 values (?, ?, ?, ?)
-                on conflict (email) do update set
-                    full_name = excluded.full_name,
-                    password_hash = excluded.password_hash
                 """.trimIndent()
             ).use { stmt ->
-                stmt.setString(1, email.trim().lowercase())
+                stmt.setString(1, normalizedEmail)
                 stmt.setString(2, fullName.trim())
                 stmt.setString(3, crypto.hash(password))
                 stmt.setObject(4, OffsetDateTime.now(ZoneOffset.UTC))
                 stmt.executeUpdate()
             }
+        }
+    }
+
+    private fun emailExistsInSystem(normalizedEmail: String): Boolean {
+        return database.withConnection { conn ->
+            fun exists(query: String): Boolean {
+                conn.prepareStatement(query).use { stmt ->
+                    stmt.setString(1, normalizedEmail)
+                    stmt.executeQuery().use { rs -> return rs.next() }
+                }
+            }
+
+            exists("select 1 from students where email = ?") ||
+                exists("select 1 from hr_specialists where email = ?") ||
+                exists("select 1 from universities where email = ?") ||
+                exists("select 1 from platform_admins where login = ?")
         }
     }
 

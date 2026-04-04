@@ -91,12 +91,20 @@ fun Application.registerRoutes(config: AppConfig, database: DatabaseFactory) {
 
             post("/students/register") {
                 val req = call.receive<StudentRegisterRequest>()
+                if (req.confirmPassword != null && req.password != req.confirmPassword) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Пароли не совпадают"))
+                    return@post
+                }
                 service.registerStudent(req.email, req.fullName, req.password)
                 call.respond(mapOf("message" to "Student account saved"))
             }
 
             post("/hr/register") {
                 val req = call.receive<HrRegisterRequest>()
+                if (req.confirmPassword != null && req.password != req.confirmPassword) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Пароли не совпадают"))
+                    return@post
+                }
                 service.registerHr(req.email, req.fullName, req.password)
                 call.respond(mapOf("message" to "HR account saved"))
             }
