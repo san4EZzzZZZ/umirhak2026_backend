@@ -1,0 +1,23 @@
+ktor:
+  application:
+    modules:
+      - com.example.ApplicationKt.module
+  deployment:
+    port: 8080
+
+app:
+  db:
+    jdbcUrl: ${JDBC_URL:jdbc:postgresql://localhost:5432/diasoft}
+    user: ${DB_USER:diasoft}
+    password: ${DB_PASSWORD:diasoft}
+  redis:
+    url: ${REDIS_URL:redis://localhost:6379}
+  security:
+    encryptionKeyBase64: ${ENCRYPTION_KEY_BASE64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+    hashSalt: ${HASH_SALT:change-me-hash-salt}
+    maxTtlMinutes: ${MAX_TTL_MINUTES:10080}
+    rateLimitPerMinute: ${RATE_LIMIT_PER_MINUTE:120}
+  superAdmin:
+    login: ${SUPERADMIN_LOGIN:admin}
+    password: ${SUPERADMIN_PASSWORD:admin123}
+  publicBaseUrl: ${PUBLIC_BASE_URL:http://localhost:8080}
