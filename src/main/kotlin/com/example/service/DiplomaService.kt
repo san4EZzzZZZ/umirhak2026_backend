@@ -110,12 +110,14 @@ class DiplomaService(
     fun addUniversityDiplomasBulkByLogin(login: String, rows: List<DiplomaCreateRequest>): BulkAddResultResponse {
         val universityCode = resolveUniversityCodeByLogin(login)
         rows.forEach { row ->
+            verifyDiplomaSignature(row)
             upsertDiploma(
                 universityCode = universityCode,
                 fullName = row.fullName,
                 specialty = row.specialty,
                 diplomaCode = row.diplomaCode,
-                graduationYear = row.graduationYear
+                graduationYear = row.graduationYear,
+                privateKeyHash = row.privateKeyHash
             )
         }
         return BulkAddResultResponse(added = rows.size)
