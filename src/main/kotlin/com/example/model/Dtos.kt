@@ -65,6 +65,7 @@ data class StudentDiplomaCheckResponse(
 data class StudentVerificationLinkCreateRequest(
     val universityCode: String,
     val diplomaNumber: String,
+    val specialty: String,
     val ttlHours: Int = 72
 )
 
@@ -119,6 +120,9 @@ data class VerifyResponse(
     val verdict: String,
     val reason: String,
     val universityCode: String? = null,
+    val universityName: String? = null,
+    val fullName: String? = null,
+    val specialty: String? = null,
     val diplomaCodeMasked: String? = null,
     val checkedAt: String
 )

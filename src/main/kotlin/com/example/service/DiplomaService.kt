@@ -52,7 +52,19 @@ private data class DiplomaLookupRow(
 private data class StudentVerificationLinkRow(
     val token: String,
     val lookupHash: String,
+    val holderFullName: String?,
+    val universityCode: String?,
+    val specialty: String?,
     val createdAt: OffsetDateTime,
+    val expiresAt: OffsetDateTime,
+    val revokedAt: OffsetDateTime?
+)
+
+private data class StudentVerificationPublicRow(
+    val lookupHash: String,
+    val holderFullName: String?,
+    val universityCode: String?,
+    val specialty: String?,
     val expiresAt: OffsetDateTime,
     val revokedAt: OffsetDateTime?
 )
@@ -519,12 +531,16 @@ class DiplomaService(
         login: String,
         req: StudentVerificationLinkCreateRequest
     ): StudentVerificationLinkResponse {
-        val (studentEmail, _) = resolveStudentByLogin(login)
+        val (studentEmail, studentFullName) = resolveStudentByLogin(login)
         val universityCode = req.universityCode.trim().uppercase()
         val diplomaNumber = req.diplomaNumber.trim()
+        val specialty = req.specialty.trim()
         val ttlHours = req.ttlHours.coerceIn(1, 168)
         if (universityCode.isBlank() || diplomaNumber.isBlank()) {
             throw IllegalArgumentException("universityCode and diplomaNumber are required")
+        }
+        if (specialty.isBlank()) {
+            throw IllegalArgumentException("specialty is required")
         }
 
         val lookupHash = lookupHash(universityCode, diplomaNumber)
@@ -556,24 +572,30 @@ class DiplomaService(
                     token,
                     student_email,
                     diploma_lookup_hash,
+                    holder_full_name,
+                    university_code,
+                    specialty,
                     created_at,
                     expires_at
-                ) values (?, ?, ?, ?, ?, ?)
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """.trimIndent()
             ).use { stmt ->
                 stmt.setObject(1, UUID.randomUUID())
                 stmt.setString(2, token)
                 stmt.setString(3, studentEmail)
                 stmt.setString(4, lookupHash)
-                stmt.setObject(5, createdAt)
-                stmt.setObject(6, expiresAt)
+                stmt.setString(5, studentFullName.trim())
+                stmt.setString(6, universityCode)
+                stmt.setString(7, specialty)
+                stmt.setObject(8, createdAt)
+                stmt.setObject(9, expiresAt)
                 stmt.executeUpdate()
             }
         }
 
         return StudentVerificationLinkResponse(
             token = token,
-            verificationUrl = "${config.publicBaseUrl}/api/v1/verify/student-link/$token",
+            verificationUrl = "${config.frontendBaseUrl}/verify/diploma/$token",
             status = "ACTIVE",
             issuedAt = createdAt.toString(),
             expiresAt = expiresAt.toString()
@@ -586,7 +608,7 @@ class DiplomaService(
         return database.withConnection { conn ->
             conn.prepareStatement(
                 """
-                select token, diploma_lookup_hash, created_at, expires_at, revoked_at
+                select token, diploma_lookup_hash, holder_full_name, university_code, specialty, created_at, expires_at, revoked_at
                 from student_verification_links
                 where student_email = ?
                 order by created_at desc
@@ -601,6 +623,9 @@ class DiplomaService(
                             StudentVerificationLinkRow(
                                 token = rs.getString("token"),
                                 lookupHash = rs.getString("diploma_lookup_hash"),
+                                holderFullName = rs.getString("holder_full_name"),
+                                universityCode = rs.getString("university_code"),
+                                specialty = rs.getString("specialty"),
                                 createdAt = rs.getObject("created_at", OffsetDateTime::class.java),
                                 expiresAt = rs.getObject("expires_at", OffsetDateTime::class.java),
                                 revokedAt = rs.getObject("revoked_at", OffsetDateTime::class.java)
@@ -615,7 +640,7 @@ class DiplomaService(
                         }
                         StudentVerificationLinkResponse(
                             token = row.token,
-                            verificationUrl = "${config.publicBaseUrl}/api/v1/verify/student-link/${row.token}",
+                            verificationUrl = "${config.frontendBaseUrl}/verify/diploma/${row.token}",
                             status = status,
                             issuedAt = row.createdAt.toString(),
                             expiresAt = row.expiresAt.toString()
@@ -659,7 +684,7 @@ class DiplomaService(
         val row = database.withConnection { conn ->
             conn.prepareStatement(
                 """
-                select diploma_lookup_hash, expires_at, revoked_at
+                select diploma_lookup_hash, holder_full_name, university_code, specialty, expires_at, revoked_at
                 from student_verification_links
                 where token = ?
                 limit 1
@@ -670,10 +695,13 @@ class DiplomaService(
                     if (!rs.next()) {
                         null
                     } else {
-                        Triple(
-                            rs.getString("diploma_lookup_hash"),
-                            rs.getObject("expires_at", OffsetDateTime::class.java),
-                            rs.getObject("revoked_at", OffsetDateTime::class.java)
+                        StudentVerificationPublicRow(
+                            lookupHash = rs.getString("diploma_lookup_hash"),
+                            holderFullName = rs.getString("holder_full_name"),
+                            universityCode = rs.getString("university_code"),
+                            specialty = rs.getString("specialty"),
+                            expiresAt = rs.getObject("expires_at", OffsetDateTime::class.java),
+                            revokedAt = rs.getObject("revoked_at", OffsetDateTime::class.java)
                         )
                     }
                 }
@@ -685,7 +713,8 @@ class DiplomaService(
             checkedAt = now.toString()
         )
 
-        val (_, expiresAt, revokedAt) = row
+        val expiresAt = row.expiresAt
+        val revokedAt = row.revokedAt
         if (revokedAt != null) {
             return VerifyResponse(
                 valid = false,
@@ -703,7 +732,9 @@ class DiplomaService(
             )
         }
 
-        val diplomaStatus = findDiplomaByLookupHash(row.first)
+        val diplomaStatus = findDiplomaByLookupHash(row.lookupHash)
+        val universityCode = row.universityCode?.trim()?.uppercase().orEmpty().ifBlank { null }
+        val universityName = universityCode?.let { findUniversityNameByCode(it) }
         return when {
             diplomaStatus == null -> VerifyResponse(
                 valid = false,
@@ -721,6 +752,10 @@ class DiplomaService(
                 valid = true,
                 verdict = "GREEN",
                 reason = "Diploma exists",
+                universityCode = universityCode,
+                universityName = universityName,
+                fullName = row.holderFullName?.trim().takeUnless { it.isNullOrBlank() },
+                specialty = row.specialty?.trim().takeUnless { it.isNullOrBlank() },
                 checkedAt = now.toString()
             )
         }
@@ -1310,6 +1345,24 @@ class DiplomaService(
     private fun lookupHash(universityCode: String, diplomaCode: String): String {
         val canonical = "$diplomaCode|$universityCode"
         return crypto.hash(canonical)
+    }
+
+    private fun findUniversityNameByCode(code: String): String? {
+        return database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                select name
+                from universities
+                where code = ?
+                limit 1
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, code.trim().uppercase())
+                stmt.executeQuery().use { rs ->
+                    if (!rs.next()) null else rs.getString("name")
+                }
+            }
+        }
     }
 
     private fun findDiplomaByLookupHash(lookupHash: String): DiplomaLookupRow? {
