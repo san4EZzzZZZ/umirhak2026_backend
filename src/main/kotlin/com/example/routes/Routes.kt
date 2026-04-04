@@ -127,6 +127,36 @@ fun Application.registerRoutes(config: AppConfig, database: DatabaseFactory) {
                 call.respond(service.getUniversityRegistryDashboard(login))
             }
 
+            get("/university/registry/diplomas") {
+                val login = call.request.queryParameters["login"]
+                    ?: throw IllegalArgumentException("login is required")
+                call.respond(service.listUniversityDiplomasByLogin(login))
+            }
+
+            post("/university/registry/diplomas") {
+                val login = call.request.queryParameters["login"]
+                    ?: throw IllegalArgumentException("login is required")
+                val req = call.receive<DiplomaCreateRequest>()
+                service.addUniversityDiplomaByLogin(login, req)
+                call.respond(mapOf("message" to "Diploma saved"))
+            }
+
+            post("/university/registry/diplomas/bulk") {
+                val login = call.request.queryParameters["login"]
+                    ?: throw IllegalArgumentException("login is required")
+                val req = call.receive<List<DiplomaCreateRequest>>()
+                call.respond(service.addUniversityDiplomasBulkByLogin(login, req))
+            }
+
+            post("/university/registry/diplomas/revoke") {
+                val login = call.request.queryParameters["login"]
+                    ?: throw IllegalArgumentException("login is required")
+                val diplomaNumber = call.request.queryParameters["diplomaNumber"]
+                    ?: throw IllegalArgumentException("diplomaNumber is required")
+                val removed = service.revokeUniversityDiplomaByNumberForLogin(login, diplomaNumber)
+                call.respond(mapOf("removed" to removed))
+            }
+
             post("/university/diplomas") {
                 val code = call.request.headers["X-University-Code"] ?: throw IllegalArgumentException("X-University-Code is required")
                 val email = call.request.headers["X-University-Email"] ?: throw IllegalArgumentException("X-University-Email is required")

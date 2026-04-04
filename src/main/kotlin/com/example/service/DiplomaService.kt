@@ -3,9 +3,11 @@
 import com.example.config.AppConfig
 import com.example.db.DatabaseFactory
 import com.example.model.BulkUploadResponse
+import com.example.model.BulkAddResultResponse
 import com.example.model.DiplomaCreateRequest
 import com.example.model.QrVerificationResponse
 import com.example.model.StudentQrResponse
+import com.example.model.UniversityDiplomaRecordResponse
 import com.example.model.UniversityRegistryDashboardResponse
 import com.example.model.UniversityResponse
 import com.example.model.VerifyResponse
@@ -66,25 +68,8 @@ class DiplomaService(
     private val json = Json { ignoreUnknownKeys = true }
 
     fun getUniversityRegistryDashboard(login: String): UniversityRegistryDashboardResponse {
-        val normalizedLogin = login.trim()
-        if (normalizedLogin.isBlank()) {
-            throw IllegalArgumentException("login is required")
-        }
-
+        val universityCode = resolveUniversityCodeByLogin(login)
         return database.withConnection { conn ->
-            val universityCode = conn.prepareStatement(
-                """
-                select code
-                from universities
-                where (email = ? or code = ?) and active = true
-                limit 1
-                """.trimIndent()
-            ).use { stmt ->
-                stmt.setString(1, normalizedLogin.lowercase())
-                stmt.setString(2, normalizedLogin.uppercase())
-                stmt.executeQuery().use { rs -> if (rs.next()) rs.getString("code") else null }
-            } ?: throw IllegalArgumentException("University not found")
-
             val inRegistry = conn.prepareStatement(
                 """
                 select count(*) as cnt
@@ -103,6 +88,68 @@ class DiplomaService(
                 inRegistry = inRegistry
             )
         }
+    }
+
+    fun listUniversityDiplomasByLogin(login: String): List<UniversityDiplomaRecordResponse> {
+        val universityCode = resolveUniversityCodeByLogin(login)
+        return database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                select id, full_name_enc, specialty_enc, graduation_year, diploma_code_enc, status, created_at
+                from diploma_registry
+                where university_code = ?
+                order by created_at desc
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, universityCode)
+                stmt.executeQuery().use { rs ->
+                    val rows = mutableListOf<UniversityDiplomaRecordResponse>()
+                    while (rs.next()) {
+                        rows += UniversityDiplomaRecordResponse(
+                            id = rs.getObject("id").toString(),
+                            fullName = crypto.decrypt(rs.getString("full_name_enc")),
+                            specialty = crypto.decrypt(rs.getString("specialty_enc")),
+                            graduationYear = rs.getInt("graduation_year"),
+                            diplomaNumber = crypto.decrypt(rs.getString("diploma_code_enc")),
+                            status = rs.getString("status"),
+                            createdAt = rs.getObject("created_at", OffsetDateTime::class.java).toString()
+                        )
+                    }
+                    rows
+                }
+            }
+        }
+    }
+
+    fun addUniversityDiplomaByLogin(login: String, request: DiplomaCreateRequest) {
+        val universityCode = resolveUniversityCodeByLogin(login)
+        upsertDiploma(
+            universityCode = universityCode,
+            fullName = request.fullName,
+            specialty = request.specialty,
+            diplomaCode = request.diplomaCode,
+            graduationYear = request.graduationYear,
+            privateKeyHash = request.privateKeyHash
+        )
+    }
+
+    fun addUniversityDiplomasBulkByLogin(login: String, rows: List<DiplomaCreateRequest>): BulkAddResultResponse {
+        val universityCode = resolveUniversityCodeByLogin(login)
+        rows.forEach { row ->
+            upsertDiploma(
+                universityCode = universityCode,
+                fullName = row.fullName,
+                specialty = row.specialty,
+                diplomaCode = row.diplomaCode,
+                graduationYear = row.graduationYear
+            )
+        }
+        return BulkAddResultResponse(added = rows.size)
+    }
+
+    fun revokeUniversityDiplomaByNumberForLogin(login: String, diplomaNumber: String): Boolean {
+        val universityCode = resolveUniversityCodeByLogin(login)
+        return revokeDiploma(universityCode, diplomaNumber)
     }
 
     fun registerStudent(email: String, fullName: String, password: String) {
@@ -246,7 +293,14 @@ class DiplomaService(
     }
 
     fun addOrUpdateDiploma(universityCode: String, request: DiplomaCreateRequest): String {
-        upsertDiploma(universityCode, request.fullName, request.specialty, request.diplomaCode, request.graduationYear)
+        upsertDiploma(
+            universityCode = universityCode,
+            fullName = request.fullName,
+            specialty = request.specialty,
+            diplomaCode = request.diplomaCode,
+            graduationYear = request.graduationYear,
+            privateKeyHash = request.privateKeyHash
+        )
         return "Diploma saved"
     }
 
@@ -486,13 +540,25 @@ class DiplomaService(
         fullName: String,
         specialty: String,
         diplomaCode: String,
-        graduationYear: Int
+        graduationYear: Int,
+        privateKeyHash: String? = null
     ): Boolean {
         if (graduationYear < 1950 || graduationYear > 2100) {
             throw IllegalArgumentException("Invalid graduation year: $graduationYear")
         }
+        val normalizedPrivateKeyHash = privateKeyHash?.trim()?.lowercase()
+        if (!normalizedPrivateKeyHash.isNullOrBlank() && !normalizedPrivateKeyHash.matches(Regex("^[a-f0-9]{64}$"))) {
+            throw IllegalArgumentException("Invalid privateKeyHash format")
+        }
 
-        val payloadHash = payloadHash(fullName, universityCode, specialty, diplomaCode, graduationYear)
+        val payloadHash = payloadHash(
+            fullName = fullName,
+            universityCode = universityCode,
+            specialty = specialty,
+            diplomaCode = diplomaCode,
+            graduationYear = graduationYear,
+            privateKeyHash = normalizedPrivateKeyHash
+        )
         val lookupHash = lookupHash(universityCode, diplomaCode)
 
         return database.withConnection { conn ->
@@ -544,13 +610,46 @@ class DiplomaService(
         }
     }
 
-    private fun payloadHash(fullName: String, universityCode: String, specialty: String, diplomaCode: String, graduationYear: Int): String {
+    private fun resolveUniversityCodeByLogin(login: String): String {
+        val normalizedLogin = login.trim()
+        if (normalizedLogin.isBlank()) {
+            throw IllegalArgumentException("login is required")
+        }
+
+        return database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                select code
+                from universities
+                where (email = ? or code = ?) and active = true
+                limit 1
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, normalizedLogin.lowercase())
+                stmt.setString(2, normalizedLogin.uppercase())
+                stmt.executeQuery().use { rs ->
+                    if (rs.next()) rs.getString("code") else throw IllegalArgumentException("University not found")
+                }
+            }
+        }
+    }
+
+    private fun payloadHash(
+        fullName: String,
+        universityCode: String,
+        specialty: String,
+        diplomaCode: String,
+        graduationYear: Int,
+        privateKeyHash: String? = null
+    ): String {
+        val normalizedPrivateKeyHash = privateKeyHash?.trim()?.lowercase()
         val canonical = listOf(
             fullName.trim().lowercase(),
             universityCode.trim().uppercase(),
             specialty.trim().lowercase(),
             diplomaCode.trim().uppercase(),
-            graduationYear.toString()
+            graduationYear.toString(),
+            normalizedPrivateKeyHash ?: ""
         ).joinToString("|")
         return crypto.hash(canonical)
     }

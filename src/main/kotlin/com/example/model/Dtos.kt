@@ -55,7 +55,8 @@ data class DiplomaCreateRequest(
     val fullName: String,
     val specialty: String,
     val diplomaCode: String,
-    val graduationYear: Int
+    val graduationYear: Int,
+    val privateKeyHash: String? = null
 )
 
 @Serializable
@@ -105,4 +106,20 @@ data class QrVerificationResponse(
 data class UniversityRegistryDashboardResponse(
     val pendingSignature: Int,
     val inRegistry: Int
+)
+
+@Serializable
+data class UniversityDiplomaRecordResponse(
+    val id: String,
+    val fullName: String,
+    val specialty: String,
+    val graduationYear: Int,
+    val diplomaNumber: String,
+    val status: String,
+    val createdAt: String
+)
+
+@Serializable
+data class BulkAddResultResponse(
+    val added: Int
 )
