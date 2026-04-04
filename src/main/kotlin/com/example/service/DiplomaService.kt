@@ -365,6 +365,9 @@ class DiplomaService(
         if (password.isBlank()) {
             throw IllegalArgumentException("Password is required")
         }
+        if (!isPasswordStrong(password)) {
+            throw IllegalArgumentException("Пароль должен содержать минимум 8 символов, строчную, прописную букву и спецсимвол")
+        }
 
         if (emailExistsInSystem(normalizedEmail)) {
             throw IllegalStateException("Аккаунт с таким email уже существует")
@@ -410,6 +413,14 @@ class DiplomaService(
                 stmt.executeQuery().use { rs -> rs.next() }
             }
         }
+    }
+
+    private fun isPasswordStrong(password: String): Boolean {
+        if (password.length < 8) return false
+        val hasLower = password.any { it.isLowerCase() }
+        val hasUpper = password.any { it.isUpperCase() }
+        val hasSpecial = password.any { !it.isLetterOrDigit() }
+        return hasLower && hasUpper && hasSpecial
     }
 
     private fun authenticateSimpleUserProfile(table: String, email: String, password: String): AuthProfile? {
