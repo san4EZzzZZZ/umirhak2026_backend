@@ -56,7 +56,10 @@ data class DiplomaCreateRequest(
     val specialty: String,
     val diplomaCode: String,
     val graduationYear: Int,
-    val privateKeyHash: String? = null
+    val privateKeyHash: String? = null,
+    val signatureBase64: String? = null,
+    val publicKeyPem: String? = null,
+    val signatureAlgorithm: String? = null
 )
 
 @Serializable

@@ -23,6 +23,10 @@ import org.apache.poi.ss.usermodel.DataFormatter
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.nio.charset.StandardCharsets
+import java.security.KeyFactory
+import java.security.Signature
+import java.security.spec.X509EncodedKeySpec
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.util.Base64
@@ -123,6 +127,7 @@ class DiplomaService(
 
     fun addUniversityDiplomaByLogin(login: String, request: DiplomaCreateRequest) {
         val universityCode = resolveUniversityCodeByLogin(login)
+        verifyDiplomaSignature(request)
         upsertDiploma(
             universityCode = universityCode,
             fullName = request.fullName,
@@ -631,6 +636,80 @@ class DiplomaService(
                     if (rs.next()) rs.getString("code") else throw IllegalArgumentException("University not found")
                 }
             }
+        }
+    }
+
+    private fun verifyDiplomaSignature(request: DiplomaCreateRequest) {
+        val privateKeyHash = request.privateKeyHash?.trim()?.lowercase().orEmpty()
+        val signatureBase64 = request.signatureBase64?.trim().orEmpty()
+        val publicKeyPem = request.publicKeyPem?.trim().orEmpty()
+        val signatureAlgorithm = request.signatureAlgorithm?.trim().orEmpty()
+
+        if (privateKeyHash.isBlank() || signatureBase64.isBlank() || publicKeyPem.isBlank()) {
+            throw IllegalArgumentException("Signature data is required for single diploma creation")
+        }
+        if (!privateKeyHash.matches(Regex("^[a-f0-9]{64}$"))) {
+            throw IllegalArgumentException("Invalid privateKeyHash format")
+        }
+        if (signatureAlgorithm.isNotBlank() && signatureAlgorithm != "RSASSA-PKCS1-v1_5-SHA-256") {
+            throw IllegalArgumentException("Unsupported signatureAlgorithm")
+        }
+
+        val canonical = buildDiplomaSigningPayload(
+            fullName = request.fullName,
+            specialty = request.specialty,
+            diplomaCode = request.diplomaCode,
+            graduationYear = request.graduationYear
+        )
+        val publicKey = parsePublicKeyFromPem(publicKeyPem)
+        val signatureBytes = try {
+            Base64.getDecoder().decode(signatureBase64)
+        } catch (_: Exception) {
+            throw IllegalArgumentException("Invalid signatureBase64 format")
+        }
+
+        val verifier = Signature.getInstance("SHA256withRSA")
+        verifier.initVerify(publicKey)
+        verifier.update(canonical)
+        if (!verifier.verify(signatureBytes)) {
+            throw IllegalArgumentException("Invalid digital signature")
+        }
+    }
+
+    private fun buildDiplomaSigningPayload(
+        fullName: String,
+        specialty: String,
+        diplomaCode: String,
+        graduationYear: Int
+    ): ByteArray {
+        val canonical = listOf(
+            fullName.trim(),
+            specialty.trim(),
+            diplomaCode.trim().uppercase(),
+            graduationYear.toString()
+        ).joinToString("|")
+        return canonical.toByteArray(StandardCharsets.UTF_8)
+    }
+
+    private fun parsePublicKeyFromPem(publicKeyPem: String): java.security.PublicKey {
+        val normalized = publicKeyPem
+            .replace("-----BEGIN PUBLIC KEY-----", "")
+            .replace("-----END PUBLIC KEY-----", "")
+            .replace(Regex("\\s"), "")
+        if (normalized.isBlank()) {
+            throw IllegalArgumentException("Invalid publicKeyPem")
+        }
+        val keyBytes = try {
+            Base64.getDecoder().decode(normalized)
+        } catch (_: Exception) {
+            throw IllegalArgumentException("Invalid publicKeyPem")
+        }
+        val keySpec = X509EncodedKeySpec(keyBytes)
+        val keyFactory = KeyFactory.getInstance("RSA")
+        return try {
+            keyFactory.generatePublic(keySpec)
+        } catch (_: Exception) {
+            throw IllegalArgumentException("Invalid publicKeyPem")
         }
     }
 
