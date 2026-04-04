@@ -34,6 +34,18 @@ data class LoginResponse(
 )
 
 @Serializable
+data class PasswordResetRequest(
+    val role: String,
+    val email: String
+)
+
+@Serializable
+data class PasswordResetConfirmRequest(
+    val token: String,
+    val newPassword: String
+)
+
+@Serializable
 data class CreateUniversityRequest(
     val code: String,
     val name: String,

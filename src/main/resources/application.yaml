@@ -12,6 +12,13 @@ app:
     password: ${DB_PASSWORD:diasoft}
   redis:
     url: ${REDIS_URL:redis://localhost:6379}
+  emailService:
+    url: ${EMAIL_SERVICE_URL:http://localhost:8090}
+  internal:
+    serviceToken: ${INTERNAL_SERVICE_TOKEN:local-internal-token}
+  frontendBaseUrl: ${FRONTEND_BASE_URL:http://localhost:5173}
+  passwordReset:
+    ttlMinutes: ${PASSWORD_RESET_TTL_MINUTES:30}
   security:
     encryptionKeyBase64: ${ENCRYPTION_KEY_BASE64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
     hashSalt: ${HASH_SALT:change-me-hash-salt}

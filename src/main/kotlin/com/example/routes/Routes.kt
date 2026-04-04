@@ -7,9 +7,12 @@ import com.example.model.DiplomaCreateRequest
 import com.example.model.HrRegisterRequest
 import com.example.model.LoginRequest
 import com.example.model.LoginResponse
+import com.example.model.PasswordResetConfirmRequest
+import com.example.model.PasswordResetRequest
 import com.example.model.StudentQrRequest
 import com.example.model.StudentRegisterRequest
 import com.example.security.CryptoService
+import com.example.integration.EmailServiceClient
 import com.example.service.DiplomaService
 import com.example.service.RedisService
 import io.ktor.http.HttpStatusCode
@@ -30,7 +33,7 @@ import io.ktor.utils.io.readRemaining
 
 fun Application.registerRoutes(config: AppConfig, database: DatabaseFactory) {
     val redis = RedisService(config.redisUrl)
-    val service = DiplomaService(config, database, CryptoService(config), redis)
+    val service = DiplomaService(config, database, CryptoService(config), redis, EmailServiceClient(config))
 
     routing {
         get("/health") {
@@ -87,6 +90,23 @@ fun Application.registerRoutes(config: AppConfig, database: DatabaseFactory) {
                         universityCode = profile.universityCode
                     )
                 )
+            }
+
+            post("/auth/password-reset/request") {
+                val req = call.receive<PasswordResetRequest>()
+                service.requestPasswordReset(req.role, req.email)
+                call.respond(mapOf("message" to "If account exists, reset link was sent"))
+            }
+
+            post("/auth/password-reset/confirm") {
+                val req = call.receive<PasswordResetConfirmRequest>()
+                service.confirmPasswordReset(req.token, req.newPassword)
+                call.respond(mapOf("message" to "Password updated"))
+            }
+
+            get("/auth/password-reset/validate") {
+                val token = call.request.queryParameters["token"] ?: ""
+                call.respond(mapOf("active" to service.isPasswordResetTokenActive(token)))
             }
 
             post("/students/register") {

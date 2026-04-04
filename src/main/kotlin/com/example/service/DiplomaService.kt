@@ -2,6 +2,7 @@
 
 import com.example.config.AppConfig
 import com.example.db.DatabaseFactory
+import com.example.integration.EmailServiceClient
 import com.example.model.BulkUploadResponse
 import com.example.model.BulkAddResultResponse
 import com.example.model.DiplomaRevokePreviewResponse
@@ -44,6 +45,12 @@ private data class DiplomaLookupRow(
     val status: String
 )
 
+private data class PasswordResetTarget(
+    val accountRole: String,
+    val accountLogin: String,
+    val email: String
+)
+
 data class AuthProfile(
     val login: String,
     val fullName: String,
@@ -63,7 +70,8 @@ class DiplomaService(
     private val config: AppConfig,
     private val database: DatabaseFactory,
     private val crypto: CryptoService,
-    private val redis: RedisService
+    private val redis: RedisService,
+    private val emailClient: EmailServiceClient
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -443,6 +451,124 @@ class DiplomaService(
 
     fun allowRequest(rateKey: String): Boolean = redis.rateLimit(rateKey, config.rateLimitPerMinute, 60)
 
+    fun requestPasswordReset(role: String, loginOrEmail: String) {
+        val target = findPasswordResetTarget(role, loginOrEmail) ?: return
+        val token = crypto.generateToken()
+        val tokenHash = crypto.hash("password-reset:$token")
+        val expiresAt = OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(config.passwordResetTtlMinutes)
+
+        database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                insert into password_reset_tokens(
+                    id,
+                    token_hash,
+                    account_role,
+                    account_login,
+                    account_email,
+                    expires_at,
+                    created_at
+                ) values (?, ?, ?, ?, ?, ?, ?)
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setObject(1, UUID.randomUUID())
+                stmt.setString(2, tokenHash)
+                stmt.setString(3, target.accountRole)
+                stmt.setString(4, target.accountLogin)
+                stmt.setString(5, target.email)
+                stmt.setObject(6, expiresAt)
+                stmt.setObject(7, OffsetDateTime.now(ZoneOffset.UTC))
+                stmt.executeUpdate()
+            }
+        }
+
+        val resetLink = "${config.frontendBaseUrl}/reset-password/$token"
+        emailClient.sendPasswordResetMail(
+            toEmail = target.email,
+            resetLink = resetLink,
+            accountRole = target.accountRole,
+            ttlMinutes = config.passwordResetTtlMinutes
+        )
+    }
+
+    fun confirmPasswordReset(token: String, newPassword: String) {
+        val tokenValue = token.trim()
+        if (tokenValue.isBlank()) {
+            throw IllegalArgumentException("token is required")
+        }
+        if (newPassword.isBlank()) {
+            throw IllegalArgumentException("password is required")
+        }
+        if (!isPasswordStrong(newPassword)) {
+            throw IllegalArgumentException("Пароль должен содержать минимум 8 символов, строчную, прописную букву, спецсимвол и только английские буквы")
+        }
+
+        val tokenHash = crypto.hash("password-reset:$tokenValue")
+        val target = consumePasswordResetToken(tokenHash)
+        val passwordHash = crypto.hash(newPassword)
+
+        val updated = database.withConnection { conn ->
+            when (target.accountRole) {
+                "student" -> conn.prepareStatement(
+                    "update students set password_hash = ? where email = ?"
+                ).use { stmt ->
+                    stmt.setString(1, passwordHash)
+                    stmt.setString(2, target.accountLogin)
+                    stmt.executeUpdate()
+                }
+                "employer" -> conn.prepareStatement(
+                    "update hr_specialists set password_hash = ? where email = ?"
+                ).use { stmt ->
+                    stmt.setString(1, passwordHash)
+                    stmt.setString(2, target.accountLogin)
+                    stmt.executeUpdate()
+                }
+                "university" -> conn.prepareStatement(
+                    "update universities set password_hash = ? where code = ? and active = true"
+                ).use { stmt ->
+                    stmt.setString(1, passwordHash)
+                    stmt.setString(2, target.accountLogin)
+                    stmt.executeUpdate()
+                }
+                "admin" -> conn.prepareStatement(
+                    "update platform_admins set password_hash = ? where login = ? and active = true"
+                ).use { stmt ->
+                    stmt.setString(1, passwordHash)
+                    stmt.setString(2, target.accountLogin)
+                    stmt.executeUpdate()
+                }
+                else -> 0
+            }
+        }
+
+        if (updated <= 0) {
+            throw IllegalArgumentException("Account for password reset was not found")
+        }
+
+        invalidateActiveResetTokens(target.accountRole, target.accountLogin)
+    }
+
+    fun isPasswordResetTokenActive(token: String): Boolean {
+        val tokenValue = token.trim()
+        if (tokenValue.isBlank()) return false
+        val tokenHash = crypto.hash("password-reset:$tokenValue")
+        val now = OffsetDateTime.now(ZoneOffset.UTC)
+        return database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                select 1
+                from password_reset_tokens
+                where token_hash = ? and used_at is null and expires_at > ?
+                limit 1
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, tokenHash)
+                stmt.setObject(2, now)
+                stmt.executeQuery().use { rs -> rs.next() }
+            }
+        }
+    }
+
     private fun createSimpleUser(table: String, email: String, fullName: String, password: String) {
         val normalizedEmail = email.trim().lowercase()
         if (normalizedEmail.isBlank()) {
@@ -511,6 +637,168 @@ class DiplomaService(
         val hasSpecial = password.any { !it.isLetterOrDigit() }
         val hasNonLatinLetters = password.any { it.isLetter() && it !in 'a'..'z' && it !in 'A'..'Z' }
         return hasLower && hasUpper && hasSpecial && !hasNonLatinLetters
+    }
+
+    private fun findPasswordResetTarget(role: String, loginOrEmail: String): PasswordResetTarget? {
+        val normalizedLogin = loginOrEmail.trim()
+        if (normalizedLogin.isBlank()) return null
+
+        return database.withConnection { conn ->
+            when (role.trim().lowercase()) {
+                "student" -> conn.prepareStatement(
+                    """
+                    select email
+                    from students
+                    where email = ?
+                    limit 1
+                    """.trimIndent()
+                ).use { stmt ->
+                    stmt.setString(1, normalizedLogin.lowercase())
+                    stmt.executeQuery().use { rs ->
+                        if (rs.next()) {
+                            PasswordResetTarget(
+                                accountRole = "student",
+                                accountLogin = rs.getString("email"),
+                                email = rs.getString("email")
+                            )
+                        } else {
+                            null
+                        }
+                    }
+                }
+                "employer", "hr" -> conn.prepareStatement(
+                    """
+                    select email
+                    from hr_specialists
+                    where email = ?
+                    limit 1
+                    """.trimIndent()
+                ).use { stmt ->
+                    stmt.setString(1, normalizedLogin.lowercase())
+                    stmt.executeQuery().use { rs ->
+                        if (rs.next()) {
+                            PasswordResetTarget(
+                                accountRole = "employer",
+                                accountLogin = rs.getString("email"),
+                                email = rs.getString("email")
+                            )
+                        } else {
+                            null
+                        }
+                    }
+                }
+                "university" -> conn.prepareStatement(
+                    """
+                    select code, email
+                    from universities
+                    where (email = ? or code = ?) and active = true
+                    limit 1
+                    """.trimIndent()
+                ).use { stmt ->
+                    stmt.setString(1, normalizedLogin.lowercase())
+                    stmt.setString(2, normalizedLogin.uppercase())
+                    stmt.executeQuery().use { rs ->
+                        if (rs.next()) {
+                            PasswordResetTarget(
+                                accountRole = "university",
+                                accountLogin = rs.getString("code"),
+                                email = rs.getString("email")
+                            )
+                        } else {
+                            null
+                        }
+                    }
+                }
+                "admin" -> conn.prepareStatement(
+                    """
+                    select login
+                    from platform_admins
+                    where login = ? and active = true
+                    limit 1
+                    """.trimIndent()
+                ).use { stmt ->
+                    stmt.setString(1, normalizedLogin.lowercase())
+                    stmt.executeQuery().use { rs ->
+                        if (rs.next()) {
+                            PasswordResetTarget(
+                                accountRole = "admin",
+                                accountLogin = rs.getString("login"),
+                                email = rs.getString("login")
+                            )
+                        } else {
+                            null
+                        }
+                    }
+                }
+                else -> null
+            }
+        }
+    }
+
+    private fun consumePasswordResetToken(tokenHash: String): PasswordResetTarget {
+        val now = OffsetDateTime.now(ZoneOffset.UTC)
+        val target = database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                select account_role, account_login, account_email
+                from password_reset_tokens
+                where token_hash = ? and used_at is null and expires_at > ?
+                limit 1
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, tokenHash)
+                stmt.setObject(2, now)
+                stmt.executeQuery().use { rs ->
+                    if (!rs.next()) {
+                        null
+                    } else {
+                        PasswordResetTarget(
+                            accountRole = rs.getString("account_role"),
+                            accountLogin = rs.getString("account_login"),
+                            email = rs.getString("account_email")
+                        )
+                    }
+                }
+            }
+        } ?: throw IllegalArgumentException("Reset token is invalid or expired")
+
+        val marked = database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                update password_reset_tokens
+                set used_at = ?
+                where token_hash = ? and used_at is null
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setObject(1, now)
+                stmt.setString(2, tokenHash)
+                stmt.executeUpdate()
+            }
+        }
+
+        if (marked <= 0) {
+            throw IllegalArgumentException("Reset token is already used")
+        }
+
+        return target
+    }
+
+    private fun invalidateActiveResetTokens(accountRole: String, accountLogin: String) {
+        val now = OffsetDateTime.now(ZoneOffset.UTC)
+        database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                update password_reset_tokens
+                set used_at = ?
+                where account_role = ? and account_login = ? and used_at is null
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setObject(1, now)
+                stmt.setString(2, accountRole)
+                stmt.setString(3, accountLogin)
+                stmt.executeUpdate()
+            }
+        }
     }
 
     private fun authenticateSimpleUserProfile(table: String, email: String, password: String): AuthProfile? {

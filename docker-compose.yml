@@ -9,11 +9,17 @@
         condition: service_healthy
       redis:
         condition: service_healthy
+      email-service:
+        condition: service_healthy
     environment:
       JDBC_URL: jdbc:postgresql://postgres:5432/diasoft
       DB_USER: diasoft
       DB_PASSWORD: diasoft
       REDIS_URL: redis://redis:6379
+      EMAIL_SERVICE_URL: http://email-service:8090
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-local-internal-token}
+      FRONTEND_BASE_URL: http://localhost:5173
+      PASSWORD_RESET_TTL_MINUTES: 30
       PUBLIC_BASE_URL: http://localhost:8080
       HASH_SALT: local-dev-salt
       ENCRYPTION_KEY_BASE64: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
@@ -49,6 +55,30 @@
       - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  email-service:
+    build:
+      context: ../umirhak2026_email_service
+      dockerfile: Dockerfile
+    container_name: diasoft-email-service
+    environment:
+      PORT: 8090
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-local-internal-token}
+      SMTP_HOST: ${SMTP_HOST:-smtp.yandex.ru}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_SECURE: ${SMTP_SECURE:-true}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_TLS_REJECT_UNAUTHORIZED: ${SMTP_TLS_REJECT_UNAUTHORIZED:-true}
+      MAIL_FROM_EMAIL: ${MAIL_FROM_EMAIL:-}
+      MAIL_FROM_NAME: ${MAIL_FROM_NAME:-DIASOFT}
+    ports:
+      - "8090:8090"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8090/health"]
       interval: 5s
       timeout: 3s
       retries: 20

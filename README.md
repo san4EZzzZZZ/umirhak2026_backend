@@ -23,7 +23,7 @@ cd D:\umirhak\umirhak2026_backend
 ### 3. Поднять PostgreSQL и Redis
 
 ```powershell
-docker compose up -d postgres redis
+docker compose up -d postgres redis email-service
 ```
 
 В этом проекте PostgreSQL проброшен на порт `55432` (чтобы избежать конфликтов с локальным Postgres на `5432`).
@@ -54,6 +54,29 @@ iwr http://127.0.0.1:8080/health
 
 ```powershell
 docker compose up --build
+```
+
+## SMTP микросервис (сброс пароля)
+
+Отдельный сервис писем расположен в соседней папке `D:\umirhak\umirhak2026_email_service`.
+
+1. Скопируйте шаблон переменных:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+2. Заполните в `.env` SMTP-параметры Яндекс и пароль приложения.
+3. Поднимите сервисы:
+
+```powershell
+docker compose up -d --build email-service postgres redis
+```
+
+Проверка email-сервиса:
+
+```powershell
+iwr http://127.0.0.1:8090/health
 ```
 
 ## Основные переменные конфигурации
