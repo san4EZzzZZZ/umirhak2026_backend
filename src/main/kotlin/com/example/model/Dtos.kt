@@ -126,3 +126,10 @@ data class UniversityDiplomaRecordResponse(
 data class BulkAddResultResponse(
     val added: Int
 )
+
+@Serializable
+data class DiplomaRevokePreviewResponse(
+    val found: Boolean,
+    val fullName: String? = null,
+    val diplomaNumber: String? = null
+)

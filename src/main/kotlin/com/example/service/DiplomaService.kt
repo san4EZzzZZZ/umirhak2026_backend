@@ -4,6 +4,7 @@ import com.example.config.AppConfig
 import com.example.db.DatabaseFactory
 import com.example.model.BulkUploadResponse
 import com.example.model.BulkAddResultResponse
+import com.example.model.DiplomaRevokePreviewResponse
 import com.example.model.DiplomaCreateRequest
 import com.example.model.QrVerificationResponse
 import com.example.model.StudentQrResponse
@@ -40,11 +41,6 @@ private data class ParsedDiplomaRow(
 )
 
 private data class DiplomaLookupRow(
-    val universityCode: String,
-    val universityName: String,
-    val diplomaCodeEnc: String,
-    val fullNameEnc: String,
-    val specialtyEnc: String,
     val status: String
 )
 
@@ -72,16 +68,15 @@ class DiplomaService(
     private val json = Json { ignoreUnknownKeys = true }
 
     fun getUniversityRegistryDashboard(login: String): UniversityRegistryDashboardResponse {
-        val universityCode = resolveUniversityCodeByLogin(login)
+        resolveUniversityCodeByLogin(login)
         return database.withConnection { conn ->
             val inRegistry = conn.prepareStatement(
                 """
                 select count(*) as cnt
                 from diploma_registry
-                where university_code = ? and status = 'ACTIVE'
+                where status = 'ACTIVE'
                 """.trimIndent()
             ).use { stmt ->
-                stmt.setString(1, universityCode)
                 stmt.executeQuery().use { rs ->
                     if (rs.next()) rs.getInt("cnt") else 0
                 }
@@ -95,34 +90,8 @@ class DiplomaService(
     }
 
     fun listUniversityDiplomasByLogin(login: String): List<UniversityDiplomaRecordResponse> {
-        val universityCode = resolveUniversityCodeByLogin(login)
-        return database.withConnection { conn ->
-            conn.prepareStatement(
-                """
-                select id, full_name_enc, specialty_enc, graduation_year, diploma_code_enc, status, created_at
-                from diploma_registry
-                where university_code = ?
-                order by created_at desc
-                """.trimIndent()
-            ).use { stmt ->
-                stmt.setString(1, universityCode)
-                stmt.executeQuery().use { rs ->
-                    val rows = mutableListOf<UniversityDiplomaRecordResponse>()
-                    while (rs.next()) {
-                        rows += UniversityDiplomaRecordResponse(
-                            id = rs.getObject("id").toString(),
-                            fullName = crypto.decrypt(rs.getString("full_name_enc")),
-                            specialty = crypto.decrypt(rs.getString("specialty_enc")),
-                            graduationYear = rs.getInt("graduation_year"),
-                            diplomaNumber = crypto.decrypt(rs.getString("diploma_code_enc")),
-                            status = rs.getString("status"),
-                            createdAt = rs.getObject("created_at", OffsetDateTime::class.java).toString()
-                        )
-                    }
-                    rows
-                }
-            }
-        }
+        resolveUniversityCodeByLogin(login)
+        return emptyList()
     }
 
     fun addUniversityDiplomaByLogin(login: String, request: DiplomaCreateRequest) {
@@ -155,6 +124,30 @@ class DiplomaService(
     fun revokeUniversityDiplomaByNumberForLogin(login: String, diplomaNumber: String): Boolean {
         val universityCode = resolveUniversityCodeByLogin(login)
         return revokeDiploma(universityCode, diplomaNumber)
+    }
+
+    fun previewUniversityDiplomaRevokeByLogin(login: String, diplomaNumber: String): DiplomaRevokePreviewResponse {
+        val universityCode = resolveUniversityCodeByLogin(login)
+        val lookupHash = lookupHash(universityCode, diplomaNumber)
+        return database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                select 1
+                from diploma_registry
+                where diploma_lookup_hash = ? and status = 'ACTIVE'
+                limit 1
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, lookupHash)
+                stmt.executeQuery().use { rs ->
+                    if (!rs.next()) {
+                        DiplomaRevokePreviewResponse(found = false)
+                    } else {
+                        DiplomaRevokePreviewResponse(found = true)
+                    }
+                }
+            }
+        }
     }
 
     fun registerStudent(email: String, fullName: String, password: String) {
@@ -335,13 +328,11 @@ class DiplomaService(
             conn.prepareStatement(
                 """
                 update diploma_registry
-                set status = 'REVOKED', revoked_at = ?
-                where diploma_lookup_hash = ? and university_code = ? and status <> 'REVOKED'
+                set status = 'REVOKED'
+                where diploma_lookup_hash = ? and status <> 'REVOKED'
                 """.trimIndent()
             ).use { stmt ->
-                stmt.setObject(1, OffsetDateTime.now(ZoneOffset.UTC))
-                stmt.setString(2, lookupHash)
-                stmt.setString(3, universityCode)
+                stmt.setString(1, lookupHash)
                 stmt.executeUpdate()
             }
         }
@@ -368,16 +359,12 @@ class DiplomaService(
                 valid = false,
                 verdict = "RED",
                 reason = "Diploma revoked",
-                universityCode = result.universityCode,
-                diplomaCodeMasked = maskDiploma(crypto.decrypt(result.diplomaCodeEnc)),
                 checkedAt = OffsetDateTime.now(ZoneOffset.UTC).toString()
             )
             else -> VerifyResponse(
                 valid = true,
                 verdict = "GREEN",
                 reason = "Diploma exists",
-                universityCode = result.universityCode,
-                diplomaCodeMasked = maskDiploma(crypto.decrypt(result.diplomaCodeEnc)),
                 checkedAt = OffsetDateTime.now(ZoneOffset.UTC).toString()
             )
         }
@@ -403,9 +390,9 @@ class DiplomaService(
         val expiresAt = OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(ttlMinutes)
         val payload = QrPayload(
             studentEmail = studentEmail.lowercase(),
-            fullName = crypto.decrypt(diploma.fullNameEnc),
-            specialty = crypto.decrypt(diploma.specialtyEnc),
-            university = diploma.universityName,
+            fullName = "Данные скрыты",
+            specialty = "Данные скрыты",
+            university = universityCode.trim().uppercase(),
             expiresAt = expiresAt.toString()
         )
 
@@ -577,37 +564,20 @@ class DiplomaService(
                 """
                 insert into diploma_registry(
                     id,
-                    university_code,
-                    full_name_enc,
-                    specialty_enc,
-                    graduation_year,
-                    diploma_code_enc,
                     diploma_payload_hash,
                     diploma_lookup_hash,
                     status,
-                    created_at,
-                    revoked_at
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, null)
+                    created_at
+                ) values (?, ?, ?, 'ACTIVE', ?)
                 on conflict (diploma_lookup_hash) do update set
-                    university_code = excluded.university_code,
-                    full_name_enc = excluded.full_name_enc,
-                    specialty_enc = excluded.specialty_enc,
-                    graduation_year = excluded.graduation_year,
-                    diploma_code_enc = excluded.diploma_code_enc,
                     diploma_payload_hash = excluded.diploma_payload_hash,
-                    status = 'ACTIVE',
-                    revoked_at = null
+                    status = 'ACTIVE'
                 """.trimIndent()
             ).use { stmt ->
                 stmt.setObject(1, UUID.randomUUID())
-                stmt.setString(2, universityCode)
-                stmt.setString(3, crypto.encrypt(fullName.trim()))
-                stmt.setString(4, crypto.encrypt(specialty.trim()))
-                stmt.setInt(5, graduationYear)
-                stmt.setString(6, crypto.encrypt(diplomaCode.trim()))
-                stmt.setString(7, payloadHash)
-                stmt.setString(8, lookupHash)
-                stmt.setObject(9, OffsetDateTime.now(ZoneOffset.UTC))
+                stmt.setString(2, payloadHash)
+                stmt.setString(3, lookupHash)
+                stmt.setObject(4, OffsetDateTime.now(ZoneOffset.UTC))
                 stmt.executeUpdate()
             }
 
@@ -734,7 +704,7 @@ class DiplomaService(
     }
 
     private fun lookupHash(universityCode: String, diplomaCode: String): String {
-        val canonical = "${diplomaCode.trim().uppercase()}|${universityCode.trim().uppercase()}"
+        val canonical = "$diplomaCode|$universityCode"
         return crypto.hash(canonical)
     }
 
@@ -742,23 +712,15 @@ class DiplomaService(
         return database.withConnection { conn ->
             conn.prepareStatement(
                 """
-                select d.university_code, u.name as university_name, d.diploma_code_enc, d.full_name_enc, d.specialty_enc, d.status
+                select status
                 from diploma_registry d
-                join universities u on u.code = d.university_code
                 where d.diploma_lookup_hash = ?
                 """.trimIndent()
             ).use { stmt ->
                 stmt.setString(1, lookupHash)
                 stmt.executeQuery().use { rs ->
                     if (!rs.next()) return@withConnection null
-                    DiplomaLookupRow(
-                        universityCode = rs.getString("university_code"),
-                        universityName = rs.getString("university_name"),
-                        diplomaCodeEnc = rs.getString("diploma_code_enc"),
-                        fullNameEnc = rs.getString("full_name_enc"),
-                        specialtyEnc = rs.getString("specialty_enc"),
-                        status = rs.getString("status")
-                    )
+                    DiplomaLookupRow(status = rs.getString("status"))
                 }
             }
         }
@@ -836,11 +798,6 @@ class DiplomaService(
 
     private fun cacheKey(universityCode: String, lookupHash: String): String =
         "verify:${universityCode.uppercase()}:$lookupHash"
-
-    private fun maskDiploma(code: String): String {
-        if (code.length <= 4) return "****"
-        return "*".repeat(code.length - 4) + code.takeLast(4)
-    }
 
     private fun generateQrBase64(content: String): String {
         val matrix = QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, 512, 512)

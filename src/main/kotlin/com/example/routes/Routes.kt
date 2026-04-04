@@ -133,6 +133,14 @@ fun Application.registerRoutes(config: AppConfig, database: DatabaseFactory) {
                 call.respond(service.listUniversityDiplomasByLogin(login))
             }
 
+            get("/university/registry/diplomas/revoke-preview") {
+                val login = call.request.queryParameters["login"]
+                    ?: throw IllegalArgumentException("login is required")
+                val diplomaNumber = call.request.queryParameters["diplomaNumber"]
+                    ?: throw IllegalArgumentException("diplomaNumber is required")
+                call.respond(service.previewUniversityDiplomaRevokeByLogin(login, diplomaNumber))
+            }
+
             post("/university/registry/diplomas") {
                 val login = call.request.queryParameters["login"]
                     ?: throw IllegalArgumentException("login is required")
