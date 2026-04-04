@@ -108,6 +108,23 @@ class DatabaseFactory(private val appConfig: AppConfig) {
                 stmt.setObject(4, now)
                 stmt.executeUpdate()
             }
+
+            conn.prepareStatement(
+                """
+                insert into platform_admins(login, full_name, password_hash, active, created_at)
+                values (?, ?, ?, true, ?)
+                on conflict (login) do update set
+                    full_name = excluded.full_name,
+                    password_hash = excluded.password_hash,
+                    active = true
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, "zuev.aleksandr.dstu@gmail.com")
+                stmt.setString(2, "Зуев Александр")
+                stmt.setString(3, crypto.hash("testtest123!"))
+                stmt.setObject(4, now)
+                stmt.executeUpdate()
+            }
         }
     }
 

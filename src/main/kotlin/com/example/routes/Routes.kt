@@ -1,5 +1,7 @@
 ﻿package com.example.routes
 
+import com.example.model.AdminLoginCodeConfirmRequest
+import com.example.model.AdminLoginCodeRequest
 import com.example.config.AppConfig
 import com.example.db.DatabaseFactory
 import com.example.model.CreateUniversityRequest
@@ -58,7 +60,10 @@ fun Application.registerRoutes(config: AppConfig, database: DatabaseFactory) {
                     "student" -> service.authenticateStudentProfile(normalizedLogin, password)
                     "employer", "hr" -> service.authenticateHrProfile(normalizedLogin, password)
                     "university" -> service.authenticateUniversityProfile(normalizedLogin, password)
-                    "admin" -> service.authenticatePlatformAdminProfile(normalizedLogin, password)
+                    "admin" -> {
+                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Admin login requires verification code"))
+                        return@post
+                    }
                     "superadmin" -> {
                         val loginMatches = normalizedLogin.equals(config.superAdminLogin.trim(), ignoreCase = true)
                         val passwordMatches = password == config.superAdminPassword
@@ -90,6 +95,37 @@ fun Application.registerRoutes(config: AppConfig, database: DatabaseFactory) {
                         login = profile.login,
                         fullName = profile.fullName,
                         universityCode = profile.universityCode
+                    )
+                )
+            }
+
+            post("/auth/admin/request-code") {
+                val req = call.receive<AdminLoginCodeRequest>()
+                val login = req.login.trim()
+                val password = req.password
+                if (login.isBlank() || password.isBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "login and password are required"))
+                    return@post
+                }
+                service.requestPlatformAdminLoginCode(login, password)
+                call.respond(mapOf("message" to "Verification code sent"))
+            }
+
+            post("/auth/admin/login") {
+                val req = call.receive<AdminLoginCodeConfirmRequest>()
+                val login = req.login.trim()
+                val password = req.password
+                val code = req.code.trim()
+                if (login.isBlank() || password.isBlank() || code.isBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "login, password and code are required"))
+                    return@post
+                }
+                val profile = service.authenticatePlatformAdminWithCode(login, password, code)
+                call.respond(
+                    LoginResponse(
+                        role = "admin",
+                        login = profile.login,
+                        fullName = profile.fullName
                     )
                 )
             }
@@ -159,15 +195,24 @@ fun Application.registerRoutes(config: AppConfig, database: DatabaseFactory) {
             }
 
             post("/admin/universities") {
-                val adminLogin = call.request.headers["X-Superadmin-Login"]
-                val adminPassword = call.request.headers["X-Superadmin-Password"]
-                if (adminLogin != config.superAdminLogin || adminPassword != config.superAdminPassword) {
-                    call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "Invalid super-admin credentials"))
-                    return@post
-                }
-
+                val adminLogin = call.request.queryParameters["login"]
+                    ?: throw IllegalArgumentException("login is required")
                 val req = call.receive<CreateUniversityRequest>()
-                call.respond(service.createUniversity(req.code, req.name, req.email, req.contactFullName, req.password))
+                call.respond(
+                    service.createUniversityByAdminLogin(
+                        adminLogin = adminLogin,
+                        universityName = req.name,
+                        email = req.email,
+                        contactFullName = req.contactFullName,
+                        password = req.password
+                    )
+                )
+            }
+
+            get("/admin/universities") {
+                val adminLogin = call.request.queryParameters["login"]
+                    ?: throw IllegalArgumentException("login is required")
+                call.respond(service.listUniversitiesByAdminLogin(adminLogin))
             }
 
             get("/university/registry/dashboard") {

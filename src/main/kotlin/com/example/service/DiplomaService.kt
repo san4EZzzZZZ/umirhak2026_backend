@@ -11,6 +11,7 @@ import com.example.model.QrVerificationResponse
 import com.example.model.StudentDiplomaCheckRequest
 import com.example.model.StudentDiplomaCheckResponse
 import com.example.model.StudentQrResponse
+import com.example.model.UniversityAdminRowResponse
 import com.example.model.UniversityDiplomaRecordResponse
 import com.example.model.UniversityRegistryDashboardResponse
 import com.example.model.UniversityResponse
@@ -31,6 +32,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import java.security.KeyFactory
+import java.security.SecureRandom
 import java.security.Signature
 import java.security.spec.X509EncodedKeySpec
 import java.time.OffsetDateTime
@@ -98,6 +100,8 @@ class DiplomaService(
     private val emailClient: EmailServiceClient
 ) {
     private val json = Json { ignoreUnknownKeys = true }
+    private val random = SecureRandom()
+    private val adminLoginCodeTtlMinutes = 10L
 
     fun getUniversityRegistryDashboard(login: String): UniversityRegistryDashboardResponse {
         resolveUniversityCodeByLogin(login)
@@ -276,6 +280,136 @@ class DiplomaService(
                 stmt.executeQuery().use { rs -> rs.next() && rs.getBoolean("active") }
             }
         }
+    }
+
+    fun createUniversityByAdminLogin(
+        adminLogin: String,
+        universityName: String,
+        email: String,
+        contactFullName: String,
+        password: String
+    ): UniversityResponse {
+        requireAdminAccess(adminLogin)
+        val normalizedName = universityName.trim()
+        if (normalizedName.isBlank()) {
+            throw IllegalArgumentException("University name is required")
+        }
+        // По требованию: code и name равны названию ВУЗа.
+        return createUniversity(
+            code = normalizedName,
+            name = normalizedName,
+            email = email,
+            contactFullName = contactFullName,
+            password = password
+        )
+    }
+
+    fun listUniversitiesByAdminLogin(adminLogin: String): List<UniversityAdminRowResponse> {
+        requireAdminAccess(adminLogin)
+        return database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                select code, name, email, contact_full_name, active, created_at
+                from universities
+                order by created_at desc
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.executeQuery().use { rs ->
+                    val rows = mutableListOf<UniversityAdminRowResponse>()
+                    while (rs.next()) {
+                        rows.add(
+                            UniversityAdminRowResponse(
+                                code = rs.getString("code"),
+                                name = rs.getString("name"),
+                                email = rs.getString("email"),
+                                contactFullName = rs.getString("contact_full_name"),
+                                active = rs.getBoolean("active"),
+                                createdAt = rs.getObject("created_at", OffsetDateTime::class.java).toString()
+                            )
+                        )
+                    }
+                    rows
+                }
+            }
+        }
+    }
+
+    fun requestPlatformAdminLoginCode(login: String, password: String) {
+        val profile = authenticatePlatformAdminProfile(login, password)
+            ?: throw IllegalArgumentException("Invalid credentials")
+        val code = (100000 + random.nextInt(900000)).toString()
+        val now = OffsetDateTime.now(ZoneOffset.UTC)
+        val expiresAt = now.plusMinutes(adminLoginCodeTtlMinutes)
+        val codeHash = crypto.hash("admin-login:${profile.login.lowercase()}:$code")
+
+        database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                update admin_login_codes
+                set used_at = ?
+                where admin_login = ? and used_at is null
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setObject(1, now)
+                stmt.setString(2, profile.login.lowercase())
+                stmt.executeUpdate()
+            }
+
+            conn.prepareStatement(
+                """
+                insert into admin_login_codes(id, admin_login, code_hash, created_at, expires_at, used_at)
+                values (?, ?, ?, ?, ?, null)
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setObject(1, UUID.randomUUID())
+                stmt.setString(2, profile.login.lowercase())
+                stmt.setString(3, codeHash)
+                stmt.setObject(4, now)
+                stmt.setObject(5, expiresAt)
+                stmt.executeUpdate()
+            }
+        }
+
+        emailClient.sendAdminLoginCodeMail(
+            toEmail = profile.login.lowercase(),
+            code = code,
+            ttlMinutes = adminLoginCodeTtlMinutes
+        )
+    }
+
+    fun authenticatePlatformAdminWithCode(login: String, password: String, code: String): AuthProfile {
+        val profile = authenticatePlatformAdminProfile(login, password)
+            ?: throw IllegalArgumentException("Invalid credentials")
+        val safeCode = code.trim()
+        if (!safeCode.matches(Regex("^\\d{6}$"))) {
+            throw IllegalArgumentException("Invalid verification code")
+        }
+
+        val now = OffsetDateTime.now(ZoneOffset.UTC)
+        val codeHash = crypto.hash("admin-login:${profile.login.lowercase()}:$safeCode")
+        val updated = database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                update admin_login_codes
+                set used_at = ?
+                where admin_login = ?
+                  and code_hash = ?
+                  and used_at is null
+                  and expires_at > ?
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setObject(1, now)
+                stmt.setString(2, profile.login.lowercase())
+                stmt.setString(3, codeHash)
+                stmt.setObject(4, now)
+                stmt.executeUpdate()
+            }
+        }
+        if (updated <= 0) {
+            throw IllegalArgumentException("Invalid or expired verification code")
+        }
+
+        return profile
     }
 
     fun authenticateUniversityProfile(login: String, password: String): AuthProfile? {
@@ -927,6 +1061,33 @@ class DiplomaService(
                 exists("select 1 from hr_specialists where email = ?") ||
                 exists("select 1 from universities where email = ?") ||
                 exists("select 1 from platform_admins where login = ?")
+        }
+    }
+
+    private fun requireAdminAccess(login: String) {
+        val normalized = login.trim()
+        if (normalized.isBlank()) {
+            throw IllegalArgumentException("login is required")
+        }
+        val isSuper = normalized.equals(config.superAdminLogin.trim(), ignoreCase = true) ||
+            normalized.equals("super@demo.diasoft", ignoreCase = true)
+        if (isSuper) return
+
+        val hasAdmin = database.withConnection { conn ->
+            conn.prepareStatement(
+                """
+                select 1
+                from platform_admins
+                where login = ? and active = true
+                limit 1
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, normalized.lowercase())
+                stmt.executeQuery().use { rs -> rs.next() }
+            }
+        }
+        if (!hasAdmin) {
+            throw IllegalArgumentException("Admin access denied")
         }
     }
 

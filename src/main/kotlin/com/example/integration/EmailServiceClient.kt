@@ -18,6 +18,13 @@ private data class PasswordResetMailRequest(
     val ttlMinutes: Long
 )
 
+@Serializable
+private data class AdminLoginCodeMailRequest(
+    val toEmail: String,
+    val code: String,
+    val ttlMinutes: Long
+)
+
 class EmailServiceClient(private val config: AppConfig) {
     private val json = Json { ignoreUnknownKeys = true }
     private val httpClient = HttpClient.newBuilder()
@@ -36,6 +43,29 @@ class EmailServiceClient(private val config: AppConfig) {
 
         val request = HttpRequest.newBuilder()
             .uri(URI.create("${config.emailServiceUrl}/internal/mail/password-reset"))
+            .timeout(Duration.ofSeconds(10))
+            .header("Content-Type", "application/json")
+            .header("X-Internal-Token", config.internalServiceToken)
+            .POST(HttpRequest.BodyPublishers.ofString(body))
+            .build()
+
+        val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+        if (response.statusCode() !in 200..299) {
+            throw IllegalStateException("Email service returned HTTP ${response.statusCode()}")
+        }
+    }
+
+    fun sendAdminLoginCodeMail(toEmail: String, code: String, ttlMinutes: Long) {
+        val body = json.encodeToString(
+            AdminLoginCodeMailRequest(
+                toEmail = toEmail,
+                code = code,
+                ttlMinutes = ttlMinutes
+            )
+        )
+
+        val request = HttpRequest.newBuilder()
+            .uri(URI.create("${config.emailServiceUrl}/internal/mail/admin-login-code"))
             .timeout(Duration.ofSeconds(10))
             .header("Content-Type", "application/json")
             .header("X-Internal-Token", config.internalServiceToken)

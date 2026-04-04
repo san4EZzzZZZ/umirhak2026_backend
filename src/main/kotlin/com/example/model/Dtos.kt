@@ -26,6 +26,19 @@ data class LoginRequest(
 )
 
 @Serializable
+data class AdminLoginCodeRequest(
+    val login: String,
+    val password: String
+)
+
+@Serializable
+data class AdminLoginCodeConfirmRequest(
+    val login: String,
+    val password: String,
+    val code: String
+)
+
+@Serializable
 data class LoginResponse(
     val role: String,
     val login: String,
@@ -93,6 +106,16 @@ data class UniversityResponse(
     val name: String,
     val email: String,
     val contactFullName: String
+)
+
+@Serializable
+data class UniversityAdminRowResponse(
+    val code: String,
+    val name: String,
+    val email: String,
+    val contactFullName: String,
+    val active: Boolean,
+    val createdAt: String
 )
 
 @Serializable
