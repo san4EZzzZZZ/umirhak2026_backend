@@ -80,7 +80,7 @@ app.post("/internal/mail/password-reset", async (req, res) => {
       <h2 style="margin:0 0 12px">Сброс пароля в DIASOFT</h2>
       <p style="margin:0 0 12px">Вы запросили сброс пароля для данной почты.</p>
       <p style="margin:0 0 16px">
-        <a href="${resetLink}" style="display:inline-block;padding:10px 14px;background:#6a2dcc;color:#fff;text-decoration:none;border-radius:8px">
+        <a href="${resetLink}" style="display:inline-block;padding:10px 14px;background:#1e5886;color:#fff;text-decoration:none;border-radius:8px">
           Сбросить пароль
         </a>
       </p>
@@ -161,3 +161,5 @@ app.post("/internal/mail/admin-login-code", async (req, res) => {
 app.listen(port, () => {
   console.log(`Email service listening on port ${port}`);
 });
+
+
