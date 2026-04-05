@@ -28,7 +28,7 @@
       RATE_LIMIT_PER_MINUTE: 120
       MAX_TTL_MINUTES: 10080
     ports:
-      - "8080:8080"
+      - "${APP_PORT:-8080}:8080"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]

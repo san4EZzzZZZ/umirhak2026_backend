@@ -150,9 +150,17 @@ docker compose logs --tail=200 app
 docker compose down -v
 docker compose up -d --build
 ```
-3. Проверить health:
+3. Если в логах есть `bind: address already in use` для `0.0.0.0:8080`, порт занят другим процессом.
+Либо освободите порт, либо запустите backend на другом порту:
+```powershell
+$env:APP_PORT="18080"
+docker compose up -d --build
+```
+4. Проверить health:
 ```powershell
 iwr http://127.0.0.1:8080/health
+# если APP_PORT=18080:
+iwr http://127.0.0.1:18080/health
 ```
 
 ## Полезные endpoints
