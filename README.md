@@ -1,150 +1,254 @@
-﻿# Diploma Verification Backend (MVP)
+﻿# UMIRHAK 2026 Backend
 
-Backend на `Ktor + PostgreSQL + Redis` с ролями: `super-admin`, `university`, `hr`, `student`.
+Серверная часть проекта «Честный Диплом» - системы реестра дипломов с проверкой подлинности, ролями и безопасным доступом к данным.
 
-## Быстрый старт (рекомендуется для новых пользователей)
+## Что это за проект
 
-### 1. Требования
+«Честный Диплом» - это платформа, которая решает проблему долгой и непрозрачной проверки дипломов.
+
+Задача проекта:
+
+- обеспечить единый реестр дипломов;
+- дать ВУЗам удобную публикацию и поддержку данных;
+- позволить выпускникам безопасно делиться подтверждением;
+- дать работодателям быстрый способ проверки подлинности;
+- снизить риск поддельных дипломов и ошибок при найме.
+
+Бэкенд реализует API, авторизацию по ролям, хранение данных, интеграцию с Redis и почтовым сервисом для восстановления доступа.
+
+## Роли и демо-аккаунты
+
+Роли в системе:
+
+- university (представитель ВУЗа)
+- student (студент)
+- employer/hr (работодатель)
+- admin (администратор платформы)
+- superadmin (суперпользователь)
+
+Демо-аккаунты фронтенда (для входа в ролевые кабинеты):
+
+- Представитель ВУЗа:
+	- login: vuz@demo.diasoft
+	- password: VuzDemo2026
+- Студент:
+	- login: student@demo.diasoft
+	- password: Student2026
+- Работодатель (HR):
+	- login: hr@demo.diasoft
+	- password: HrDemo2026
+- Администратор платформы:
+	- login: admin@demo.diasoft
+	- password: AdminDemo2026
+- Суперпользователь:
+	- login: super@demo.diasoft
+	- password: SuperDemo2026
+
+Важно:
+
+- В backend также есть системные переменные `SUPERADMIN_LOGIN` и `SUPERADMIN_PASSWORD` (по умолчанию `admin/admin123`) для базовой серверной конфигурации.
+- Если нужны единые креды между frontend demo и backend auth, задайте их согласованно в конфигурации окружения.
+
+## Участники команды
+
+- Зуев Александр - Frontend
+- Межмал Алексей - Frontend
+- Михайленко Максим - Backend
+
+## Технологии
+
+- Kotlin
+- Ktor
+- PostgreSQL
+- Redis
+- Flyway
+- HikariCP
+- Gradle
+- Docker / Docker Compose
+- Node.js email-service (вспомогательный микросервис)
+
+## Как запустить проект
+
+### Зависимости
 
 - JDK 21
-- Docker Desktop (запущен)
+- Docker Desktop
+- (опционально) Node.js, если нужно отдельно развивать email-service
 
-### 2. Перейти в папку backend
+### Вариант 1. Локальный запуск backend + контейнерные зависимости
 
-Важно запускать Gradle именно из директории проекта:
+1. Перейдите в директорию backend:
 
 ```powershell
 cd D:\umirhak\umirhak2026_backend
 ```
 
-Если запускать из родительской папки, будет ошибка:
-`.\gradlew.bat: The term '.\gradlew.bat' is not recognized...`
-
-### 3. Поднять PostgreSQL и Redis
+2. Поднимите инфраструктурные сервисы:
 
 ```powershell
 docker compose up -d postgres redis email-service
 ```
 
-В этом проекте PostgreSQL проброшен на порт `55432` (чтобы избежать конфликтов с локальным Postgres на `5432`).
-
-### 4. Указать переменные окружения для локального запуска
+3. Задайте переменные окружения для приложения:
 
 ```powershell
 $env:JDBC_URL="jdbc:postgresql://localhost:55432/diasoft"
 $env:DB_USER="diasoft"
 $env:DB_PASSWORD="diasoft"
+$env:REDIS_URL="redis://localhost:6379"
 ```
 
-### 5. Запустить сервер
+4. Запустите сервер:
 
 ```powershell
 .\gradlew.bat run
 ```
 
-### 6. Проверить, что сервер жив
+5. Проверьте health endpoint:
 
 ```powershell
 iwr http://127.0.0.1:8080/health
 ```
 
-Ожидаемый ответ: `{"status":"ok"}`.
+Ожидаемый ответ: `{\"status\":\"ok\"}`.
 
-## Альтернатива: запуск всего через Docker
+### Вариант 2. Полностью через Docker Compose
 
 ```powershell
+cd D:\umirhak\umirhak2026_backend
 docker compose up --build
 ```
 
-## SMTP микросервис (сброс пароля)
+Этот режим поднимет:
 
-Отдельный сервис писем расположен в папке `D:\umirhak\umirhak2026_backend\email_service`.
+- app (backend)
+- postgres
+- redis
+- email-service
 
-1. Скопируйте шаблон переменных:
+## Пример запуска связки frontend + backend
 
-```powershell
-Copy-Item .env.example .env
+1. Поднимите backend (одним из способов выше).
+2. В frontend задайте:
+
+```bash
+VITE_API_BASE_URL=http://localhost:8080
 ```
 
-2. Заполните в `.env` SMTP-параметры Яндекс и пароль приложения.
-3. Поднимите сервисы:
+3. Запустите frontend (`npm run dev` в соседнем репозитории).
+
+## Основные команды
 
 ```powershell
-docker compose up -d --build email-service postgres redis
+# запуск приложения
+.\gradlew.bat run
+
+# тесты
+.\gradlew.bat test
+
+# сборка
+.\gradlew.bat build
+
+# миграции Flyway (при необходимости)
+.\gradlew.bat flywayMigrate
 ```
 
-Проверка email-сервиса:
+## Конфигурация
 
-```powershell
-iwr http://127.0.0.1:8090/health
-```
-
-## Основные переменные конфигурации
+Ключевые переменные:
 
 - `JDBC_URL`, `DB_USER`, `DB_PASSWORD`
 - `REDIS_URL`
-- `SUPERADMIN_LOGIN`, `SUPERADMIN_PASSWORD`
-- `HASH_SALT`, `ENCRYPTION_KEY_BASE64`
+- `EMAIL_SERVICE_URL`
+- `INTERNAL_SERVICE_TOKEN`
+- `FRONTEND_BASE_URL`
+- `PASSWORD_RESET_TTL_MINUTES`
 - `PUBLIC_BASE_URL`
+- `HASH_SALT`
+- `ENCRYPTION_KEY_BASE64`
+- `SUPERADMIN_LOGIN`, `SUPERADMIN_PASSWORD`
+- `RATE_LIMIT_PER_MINUTE`
+- `MAX_TTL_MINUTES`
 
-Значения по умолчанию описаны в `src/main/resources/application.yaml`.
+Значения по умолчанию указаны в `src/main/resources/application.yaml` и `docker-compose.yml`.
 
-## Частые проблемы и решения
+## Структура проекта
 
-### 1) `gradlew.bat` не найден
+Кратко по основным директориям:
 
-Причина: команда выполнена не из папки `umirhak2026_backend`.
+- src/main/kotlin/com/example/config - конфигурация приложения.
+- src/main/kotlin/com/example/routes - HTTP маршруты и API endpoints.
+- src/main/kotlin/com/example/service - бизнес-логика.
+- src/main/kotlin/com/example/security - безопасность, токены, ограничения.
+- src/main/kotlin/com/example/db - доступ к данным и слой работы с БД.
+- src/main/kotlin/com/example/model - доменные модели и DTO.
+- src/main/kotlin/com/example/integration - интеграции с внешними сервисами.
+- src/main/resources/db/migration - SQL миграции Flyway.
+- email_service - Node.js микросервис отправки писем.
 
-Решение:
-```powershell
-cd D:\umirhak\umirhak2026_backend
-.\gradlew.bat run
+## Как пользоваться решением
+
+### Сценарий 1. Регистрация/вход пользователя
+
+1. Клиент отправляет запрос на auth endpoint.
+2. Backend валидирует данные и роль.
+3. Пользователь получает доступ к API своей роли.
+
+### Сценарий 2. Верификация диплома работодателем
+
+1. HR отправляет запрос проверки (по номеру/идентификатору/токену).
+2. Backend проверяет запись в реестре и статус.
+3. Возвращается результат верификации.
+
+### Сценарий 3. Восстановление доступа
+
+1. Пользователь инициирует reset.
+2. Backend генерирует токен и отправляет письмо через email-service.
+3. Пользователь устанавливает новый пароль в пределах TTL.
+
+## Примеры API команд
+
+```bash
+# health
+curl http://localhost:8080/health
+
+# пример (маршрут зависит от текущей версии API)
+curl -X POST http://localhost:8080/api/v1/hr/register \
+	-H "Content-Type: application/json" \
+	-d '{"login":"hr@example.com","password":"Secret123"}'
 ```
 
-### 2) Таймаут при скачивании Gradle wrapper
+## Демо, деплой и материалы
 
-Симптом:
-`Downloading ... failed: timeout`
+- Локальный backend: http://localhost:8080
+- Health-check: http://localhost:8080/health
+- Email-service: http://localhost:8090/health
+- Публичный деплой: пока не опубликован.
+- Видео/скринкаст: пока не добавлен.
 
-Проверьте интернет/прокси/VPN и повторите:
-```powershell
-.\gradlew.bat run
-```
+Рекомендуется добавить:
 
-### 3) `user "diasoft" password authentication failed`
+- ссылку на деплой API (если появится);
+- короткий скринкаст потока "вход -> проверка диплома -> результат".
 
-Причины:
-- конфликт порта `5432` с другим Postgres на хосте
-- приложение подключается не к тому экземпляру базы
+## Частые проблемы
 
-Решение для этого проекта:
-1. Использовать `JDBC_URL` с портом `55432`
-2. Запустить контейнеры из `docker-compose.yml`
-3. Указать:
-```powershell
-$env:JDBC_URL="jdbc:postgresql://localhost:55432/diasoft"
-$env:DB_USER="diasoft"
-$env:DB_PASSWORD="diasoft"
-```
+### 1. Команда .\gradlew.bat не найдена
 
-### 4) Нужно полностью пересоздать БД
+Запуск выполнен не из папки backend. Перейдите в `umirhak2026_backend` и повторите.
 
-Если состояние БД сломано или credentials не совпадают:
+### 2. Ошибка подключения к PostgreSQL
 
-```powershell
-docker compose down -v
-docker compose up -d postgres redis
-```
+Проверьте, что контейнер postgres запущен и используете порт `55432` для локального запуска JVM-приложения.
 
-`-v` удаляет volume с данными PostgreSQL.
+### 3. Порт уже занят
 
-## Полезные endpoints
+Освободите порт или измените маппинг в `docker-compose.yml`.
 
-- Health: `GET /health`
-- API base: `/api/v1/...`
+## Связанные репозитории
 
-## Короткий smoke-тест после запуска
+- Frontend: ../umirhak2026_front
 
-1. `GET http://127.0.0.1:8080/health` -> `{"status":"ok"}`
-2. `POST /api/v1/hr/register` (любой тестовый пользователь)
-3. Убедиться, что ответ `200` и сервис не падает
+## Статус
+
+Учебный/демо проект реестра дипломов, развивается поэтапно.
