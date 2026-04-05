@@ -1,0 +1,14 @@
+{
+  "name": "umirhak2026-email-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Internal SMTP microservice for password reset emails",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "nodemailer": "^6.9.16"
+  }
+}

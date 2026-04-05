@@ -61,7 +61,7 @@
 
   email-service:
     build:
-      context: ../umirhak2026_email_service
+      context: ./email_service
       dockerfile: Dockerfile
     container_name: diasoft-email-service
     environment:

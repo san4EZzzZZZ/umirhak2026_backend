@@ -58,7 +58,7 @@ docker compose up --build
 
 ## SMTP микросервис (сброс пароля)
 
-Отдельный сервис писем расположен в соседней папке `D:\umirhak\umirhak2026_email_service`.
+Отдельный сервис писем расположен в папке `D:\umirhak\umirhak2026_backend\email_service`.
 
 1. Скопируйте шаблон переменных:
 
