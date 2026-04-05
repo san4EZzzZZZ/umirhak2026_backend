@@ -28,11 +28,6 @@ class DatabaseFactory(private val appConfig: AppConfig) {
     fun migrate() {
         Flyway.configure()
             .dataSource(dataSource)
-            .locations("classpath:db/migration")
-            .sqlMigrationPrefix("V")
-            .repeatableSqlMigrationPrefix("R")
-            .sqlMigrationSeparator("__")
-            .sqlMigrationSuffixes(".sql")
             .baselineOnMigrate(true)
             .load()
             .migrate()
