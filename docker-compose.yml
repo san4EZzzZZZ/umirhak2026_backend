@@ -29,6 +29,12 @@
       MAX_TTL_MINUTES: 10080
     ports:
       - "8080:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
 
   postgres:
     image: postgres:16-alpine
@@ -46,6 +52,7 @@
       retries: 20
     volumes:
       - pg-data:/var/lib/postgresql/data
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -58,6 +65,7 @@
       interval: 5s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
 
   email-service:
     build:
@@ -82,6 +90,7 @@
       interval: 5s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
 
 volumes:
   pg-data:

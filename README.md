@@ -138,6 +138,23 @@ docker compose up -d postgres redis
 
 `-v` удаляет volume с данными PostgreSQL.
 
+### 5) `app` контейнер в статусе `exited` и `:8080` не отвечает
+
+1. Посмотреть причину падения:
+```powershell
+docker compose ps -a
+docker compose logs --tail=200 app
+```
+2. Если ошибка связана с Flyway/миграциями (checksum, validate failed, relation does not exist), сбросьте volume БД:
+```powershell
+docker compose down -v
+docker compose up -d --build
+```
+3. Проверить health:
+```powershell
+iwr http://127.0.0.1:8080/health
+```
+
 ## Полезные endpoints
 
 - Health: `GET /health`
